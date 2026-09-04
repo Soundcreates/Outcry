@@ -1,5 +1,14 @@
 import { z } from "zod";
 
+const optionalUrl = z.preprocess(
+  (value) => value === "" ? undefined : value,
+  z.string().url().optional(),
+);
+const optionalString = z.preprocess(
+  (value) => value === "" ? undefined : value,
+  z.string().min(1).optional(),
+);
+
 const publicEnvSchema = z.object({
   NEXT_PUBLIC_WORLD_WS: z.string().url().default("ws://localhost:2567"),
   NEXT_PUBLIC_SOLANA_RPC: z.string().url().default("https://api.devnet.solana.com"),
@@ -10,11 +19,12 @@ const publicEnvSchema = z.object({
 });
 
 const serverEnvSchema = publicEnvSchema.extend({
-  LIVEKIT_URL: z.string().url().optional(),
-  LIVEKIT_API_KEY: z.string().min(1).optional(),
-  LIVEKIT_API_SECRET: z.string().min(1).optional(),
-  ASSEMBLYAI_API_KEY: z.string().min(1).optional(),
-  OUTCRY_PROGRAM_ID: z.string().min(1).optional(),
+  LIVEKIT_URL: optionalUrl,
+  LIVEKIT_API_KEY: optionalString,
+  LIVEKIT_API_SECRET: optionalString,
+  ASSEMBLYAI_API_KEY: optionalString,
+  OUTCRY_PROGRAM_ID: optionalString,
+  OUTCRY_MATCH_ADDRESS: optionalString,
 });
 
 export function readPublicEnv(input: Record<string, unknown> = process.env) {

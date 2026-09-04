@@ -5,6 +5,9 @@ const tests = [
   "tests/world/map-validator.test.mjs",
   "tests/world/collision.test.mjs",
   "apps/world-server/src/world/world.test.ts",
+  "apps/web/src/chain/joinMatch.test.ts",
+  "apps/web/src/chain/privacy.test.ts",
+  "apps/web/src/world/PitOverlay.test.ts",
 ];
 
 for (const test of tests) {

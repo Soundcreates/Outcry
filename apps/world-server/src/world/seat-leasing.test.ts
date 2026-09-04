@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { loadWorldGeometry } from "./geometry";
 import {
   parseSeatConfirmation,
+  parseSeatReconciliation,
   parseSeatRequest,
   SeatLeaseManager,
 } from "./seat-leasing";
@@ -21,6 +22,11 @@ assert.deepEqual(parseSeatRequest({ pitId: pit.pitId, seatIndex: seat.seatIndex 
 assert.equal(parseSeatRequest({ pitId: pit.pitId, seatIndex: seat.seatIndex, x: 999999 }), null);
 assert.deepEqual(parseSeatConfirmation({ confirmed: true }), { confirmed: true });
 assert.equal(parseSeatConfirmation({ confirmed: "yes" }), null);
+assert.deepEqual(parseSeatReconciliation({ matchAddress: "match", walletAddress: "wallet" }), {
+  matchAddress: "match",
+  walletAddress: "wallet",
+});
+assert.equal(parseSeatReconciliation({ matchAddress: "match", walletAddress: "wallet", seatIndex: 0 }), null);
 
 const reserved = manager.reserve("alice", pit.pitId, seat.seatIndex, seat.x, seat.y);
 assert.equal(reserved.accepted, true);
@@ -62,6 +68,13 @@ assert.equal(manager.get(pit.pitId, seat.seatIndex)?.status, "CONFIRMED");
 now += 100_000;
 assert.equal(manager.expire().length, 0, "confirmed seats do not expire during the world lease");
 manager.releaseSession("confirmed");
+
+const restored = manager.restoreConfirmed("restored", pit.pitId, seat.seatIndex);
+assert.equal(restored.accepted, true);
+if (!restored.accepted) throw new Error("restore should succeed");
+assert.equal(restored.action, "restored");
+assert.equal(manager.get(pit.pitId, seat.seatIndex)?.status, "CONFIRMED");
+manager.releaseSession("restored");
 
 let racesWithDoubleReservation = 0;
 for (let race = 0; race < 1_000; race += 1) {

@@ -11,11 +11,13 @@
     "test:integration": "pnpm --filter @outcry/web test:integration",
     "validate:maps": "node tools/validate-maps.mjs",
     "test:program": "node tests/program/smoke.test.mjs",
+    "test:program:localnet": "node --import tsx tools/phase-05.localnet.mjs",
     "test:gate": "node tools/phase-00.mjs",
     "dev:web": "pnpm --filter @outcry/web dev",
     "dev:world": "pnpm --filter @outcry/world-server dev"
   },
   "devDependencies": {
+    "@solana/web3.js": "1.98.4",
     "@types/node": "24.3.0",
     "tsx": "4.20.3",
     "typescript": "5.9.2"

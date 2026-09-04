@@ -1,11 +1,14 @@
 import { Room, type Client } from "colyseus";
 import { type MovementInput } from "@outcry/shared/domain";
+import { readServerEnv } from "@outcry/shared/env";
+import { createMatchMembershipReader, type MatchMembershipReader } from "../chain/match-membership";
 import { loadWorldGeometry, type WorldGeometry } from "./geometry";
 import { PLAYER_HEIGHT, PLAYER_WIDTH, parseMovementInput, simulatePlayer } from "./simulation";
 import { PitState, PlayerState, SeatState, WorldState } from "./WorldState";
 import {
   parseSeatRequest,
   parseSeatConfirmation,
+  parseSeatReconciliation,
   SeatLeaseManager,
   type SeatActionResult,
   type SeatLease,
@@ -19,8 +22,12 @@ const MAX_PENDING_INPUTS = 32;
 export class WorldRoom extends Room<{ state: WorldState }> {
   // ponytail: process-local presence count; use shared storage when the server is horizontally scaled.
   private static readonly activeSessions = new Set<string>();
+  private static readonly seatedSessions = new Map<string, { pitId: string; seatIndex: number }>();
+  private static readonly knownPitIds = new Set(["wall-street-01", "wall-street-02"]);
   private geometry!: WorldGeometry;
   private seating!: SeatLeaseManager;
+  private membershipReader?: MatchMembershipReader;
+  private activeMatchAddress = "";
   private readonly pendingInputs = new Map<string, MovementInput[]>();
 
   async onCreate(options: { worldId?: string } = {}) {
@@ -29,12 +36,19 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
     this.geometry = await loadWorldGeometry();
     this.seating = new SeatLeaseManager(this.geometry.pits, this.geometry.seats);
+    const env = readServerEnv();
+    this.activeMatchAddress = env.OUTCRY_MATCH_ADDRESS ?? "";
+    this.membershipReader = createMatchMembershipReader({
+      rpcUrl: env.NEXT_PUBLIC_SOLANA_RPC,
+      programId: env.OUTCRY_PROGRAM_ID,
+    });
     this.setState(new WorldState());
     this.initializePitState();
     this.onMessage("input", (client, payload) => this.enqueueInput(client, payload));
     this.onMessage("interact", (client, payload) => this.interact(client, payload));
     this.onMessage("beginConfirm", (client) => this.beginConfirmation(client));
-    this.onMessage("confirmSeat", (client, payload) => this.confirmSeat(client, payload));
+    this.onMessage("confirmSeat", (client, payload) => void this.confirmSeat(client, payload));
+    this.onMessage("reconcileSeat", (client, payload) => void this.reconcileSeat(client, payload));
     this.onMessage("releaseSeat", (client) => this.releaseSeat(client));
     this.setSimulationInterval(() => this.simulate(), TICK_DT_MS);
   }
@@ -105,10 +119,23 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.state.players.delete(sessionId);
     this.pendingInputs.delete(sessionId);
     WorldRoom.activeSessions.delete(sessionId);
+    WorldRoom.seatedSessions.delete(sessionId);
   }
 
   static onlineCount() {
     return WorldRoom.activeSessions.size;
+  }
+
+  static isActiveSession(sessionId: string) {
+    return WorldRoom.activeSessions.has(sessionId);
+  }
+
+  static isKnownPitId(pitId: string) {
+    return WorldRoom.knownPitIds.has(pitId);
+  }
+
+  static canJoinMedia(sessionId: string, pitId: string) {
+    return WorldRoom.seatedSessions.get(sessionId)?.pitId === pitId;
   }
 
   private initializePitState() {
@@ -122,7 +149,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       state.capacity = pit.capacity;
       state.interactionRadius = pit.interactionRadius;
       state.minPlayers = pit.minPlayers;
-      state.activeMatchId = "";
+      state.activeMatchId = pit.pitId === "wall-street-01" ? this.activeMatchAddress : "";
       for (const seat of this.geometry.seats.filter(({ pitId }) => pitId === pit.pitId)) {
         const seatState = new SeatState();
         seatState.pitId = seat.pitId;
@@ -154,20 +181,85 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       player.x,
       player.y,
     );
-    if (result.accepted) this.seatPlayer(player, result.seat);
+    if (result.accepted) this.seatPlayer(client.sessionId, player, result.seat);
     this.sendSeatResult(client, result);
   }
 
-  private confirmSeat(client: Client, payload: unknown) {
+  private async confirmSeat(client: Client, payload: unknown) {
     const confirmation = parseSeatConfirmation(payload);
-    const result = confirmation?.confirmed
-      ? this.seating.confirm(client.sessionId)
-      : { accepted: false as const, reason: "confirmation_required" };
+    if (!confirmation) {
+      this.sendSeatResult(client, { accepted: false, reason: "invalid_confirmation" });
+      return;
+    }
+    if (!confirmation.confirmed) {
+      this.releaseSeat(client);
+      return;
+    }
+
+    const seat = this.seating.getForSession(client.sessionId);
+    if (!seat || !confirmation.matchAddress || !confirmation.walletAddress || !this.membershipReader) {
+      this.releaseSeat(client);
+      this.sendSeatResult(client, { accepted: false, reason: "chain_confirmation_unavailable" });
+      return;
+    }
+    if (confirmation.matchAddress !== this.activeMatchAddress || seat.pitId !== "wall-street-01") {
+      this.releaseSeat(client);
+      this.sendSeatResult(client, { accepted: false, reason: "chain_match_mismatch" });
+      return;
+    }
+
+    const isMember = await this.membershipReader.isConfirmed({
+      matchAddress: confirmation.matchAddress,
+      walletAddress: confirmation.walletAddress,
+      seatIndex: seat.seatIndex,
+    });
+    if (!isMember) {
+      this.releaseSeat(client);
+      this.sendSeatResult(client, { accepted: false, reason: "chain_membership_not_found" });
+      return;
+    }
+
+    if (seat.status === "RESERVED") this.seating.beginConfirmation(client.sessionId);
+    const result = this.seating.confirm(client.sessionId);
     if (result.accepted) {
       const player = this.state.players.get(client.sessionId);
       if (player) player.mode = "SEATED";
       this.syncSeat(result.seat);
     }
+    this.sendSeatResult(client, result);
+  }
+
+  private async reconcileSeat(client: Client, payload: unknown) {
+    const identity = parseSeatReconciliation(payload);
+    const player = this.state.players.get(client.sessionId);
+    if (!identity || !player || player.mode !== "WALKING") {
+      this.sendSeatResult(client, { accepted: false, reason: "invalid_reconciliation" });
+      return;
+    }
+    const pit = this.geometry.pits.find(({ pitId }) => pitId === "wall-street-01");
+    if (
+      !pit ||
+      identity.matchAddress !== this.activeMatchAddress ||
+      !this.membershipReader
+    ) {
+      this.sendSeatResult(client, { accepted: false, reason: "chain_reconciliation_unavailable" });
+      return;
+    }
+
+    const seatIndex = (await Promise.all(
+      Array.from({ length: pit.capacity }, (_, index) => this.membershipReader!.isConfirmed({
+        matchAddress: identity.matchAddress,
+        walletAddress: identity.walletAddress,
+        seatIndex: index,
+      }).then((confirmed) => confirmed ? index : undefined)),
+    )).find((index): index is number => index !== undefined);
+    if (seatIndex === undefined) {
+      this.sendSeatResult(client, { accepted: false, reason: "chain_membership_not_found" });
+      return;
+    }
+
+    const result = this.seating.restoreConfirmed(client.sessionId, pit.pitId, seatIndex);
+    if (result.accepted) this.seatPlayer(client.sessionId, player, result.seat);
     this.sendSeatResult(client, result);
   }
 
@@ -184,21 +276,22 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     for (const released of releasedSeats) {
       this.syncSeat(this.seating.get(released.pitId, released.seatIndex));
     }
-    this.clearSeatPlayer(player, releasedSeats[0]);
+    this.clearSeatPlayer(player, releasedSeats[0], client.sessionId);
     this.sendSeatResult(client, { accepted: true, action: "released" });
   }
 
-  private seatPlayer(player: PlayerState, seat: SeatLease) {
+  private seatPlayer(sessionId: string, player: PlayerState, seat: SeatLease) {
     player.x = seat.x;
     player.y = seat.y;
     player.facing = seat.facing;
     player.mode = "SEATED";
     player.pitId = seat.pitId;
     player.seatIndex = seat.seatIndex;
+    WorldRoom.seatedSessions.set(sessionId, { pitId: seat.pitId, seatIndex: seat.seatIndex });
     this.syncSeat(seat);
   }
 
-  private clearSeatPlayer(player: PlayerState, seat?: SeatLease) {
+  private clearSeatPlayer(player: PlayerState, seat?: SeatLease, sessionId?: string) {
     const exit = seat ? this.findSeatExit(seat) : undefined;
     if (exit) {
       player.x = exit.x;
@@ -207,6 +300,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     player.mode = "WALKING";
     player.pitId = "";
     player.seatIndex = -1;
+    if (sessionId) WorldRoom.seatedSessions.delete(sessionId);
   }
 
   private findSeatExit(seat: SeatLease) {
@@ -234,7 +328,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     for (const expired of this.seating.expire()) {
       const player = this.state.players.get(expired.holderSessionId);
       if (player && player.pitId === expired.pitId && player.seatIndex === expired.seatIndex) {
-        this.clearSeatPlayer(player, expired);
+        this.clearSeatPlayer(player, expired, expired.holderSessionId);
       }
       this.syncSeat(this.seating.get(expired.pitId, expired.seatIndex));
     }

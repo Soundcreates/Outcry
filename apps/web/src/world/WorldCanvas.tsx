@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type Phaser from "phaser";
 import { Client } from "@colyseus/sdk";
 import { WorldState } from "@outcry/shared/world-state";
+import { connectedWalletAddress } from "../chain/joinMatch";
 import { createWorldGame, type WorldRoom } from "./createWorldGame";
+import PitOverlay from "./PitOverlay";
 
 type Props = {
   worldId: string;
@@ -10,10 +12,13 @@ type Props = {
 };
 
 type ConnectionState = "connecting" | "connected" | "offline";
+type PitState = { pitId: string; seatIndex: number; matchAddress?: string; chainConfirmed?: boolean };
 
 export default function WorldCanvas({ worldId, onExit }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const roomRef = useRef<WorldRoom | undefined>(undefined);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
+  const [pit, setPit] = useState<PitState>();
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -30,8 +35,17 @@ export default function WorldCanvas({ worldId, onExit }: Props) {
           return;
         }
         room = joinedRoom;
+        roomRef.current = joinedRoom;
         setConnectionState("connected");
-        game = createWorldGame(mountRef.current!, worldId, room);
+        const matchAddress = joinedRoom.state.pits.get("wall-street-01")?.activeMatchId;
+        const walletAddress = connectedWalletAddress();
+        if (matchAddress && walletAddress) {
+          joinedRoom.send("reconcileSeat", { matchAddress, walletAddress });
+        }
+        game = createWorldGame(mountRef.current!, worldId, room, {
+          onSeatEnter: setPit,
+          onSeatExit: () => setPit(undefined),
+        });
       })
       .catch((error: unknown) => {
         console.warn("World server unavailable; running local preview", error);
@@ -44,6 +58,7 @@ export default function WorldCanvas({ worldId, onExit }: Props) {
     return () => {
       disposed = true;
       void room?.leave();
+      roomRef.current = undefined;
       game?.destroy(true);
     };
   }, [worldId]);
@@ -59,6 +74,22 @@ export default function WorldCanvas({ worldId, onExit }: Props) {
         {connectionState === "offline" && "Multiplayer offline · run pnpm dev:world"}
       </p>
       <div aria-label={`${worldId} trading floor`} ref={mountRef} />
+      {pit && roomRef.current && (
+        <PitOverlay
+          matchId={pit.pitId}
+          matchAddress={pit.matchAddress}
+          chainConfirmed={pit.chainConfirmed}
+          onChainConfirmed={({ matchAddress, walletAddress }) => roomRef.current?.send("confirmSeat", {
+            confirmed: true,
+            matchAddress,
+            walletAddress,
+          })}
+          onExit={() => roomRef.current?.send("releaseSeat")}
+          role="PLAYER"
+          seatIndex={pit.seatIndex}
+          sessionId={roomRef.current.sessionId}
+        />
+      )}
     </main>
   );
 }

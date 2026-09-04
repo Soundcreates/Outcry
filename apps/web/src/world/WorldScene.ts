@@ -26,9 +26,15 @@ type InteractiveSeat = {
   interactionRadius: number;
 };
 
+export type WorldSceneCallbacks = {
+  onSeatEnter?: (seat: { pitId: string; seatIndex: number; matchAddress?: string; chainConfirmed?: boolean }) => void;
+  onSeatExit?: () => void;
+};
+
 export class WorldScene extends Phaser.Scene {
   private readonly worldId: string;
   private readonly room?: WorldRoom;
+  private readonly callbacks: WorldSceneCallbacks;
   private player?: Phaser.Physics.Arcade.Sprite;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd?: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
@@ -40,12 +46,14 @@ export class WorldScene extends Phaser.Scene {
   private inputSequence = 0;
   private readonly remotePlayers = new Map<string, RemotePlayer>();
   private interactiveSeats: InteractiveSeat[] = [];
+  private seatOverlayOpen = false;
   private readonly mapSlug = "wall-street";
 
-  constructor(worldId: string, room?: WorldRoom) {
+  constructor(worldId: string, room?: WorldRoom, callbacks: WorldSceneCallbacks = {}) {
     super({ key: "WorldScene" });
     this.worldId = worldId;
     this.room = room;
+    this.callbacks = callbacks;
   }
 
   preload() {
@@ -237,6 +245,10 @@ export class WorldScene extends Phaser.Scene {
       this.player.setPosition(localState.x, localState.y);
       this.player.setDepth(localState.y);
       if (this.player.body) this.player.body.enable = localState.mode !== "SEATED";
+      if (this.seatOverlayOpen && localState.mode === "WALKING") {
+        this.seatOverlayOpen = false;
+        this.callbacks.onSeatExit?.();
+      }
     }
 
     const seen = new Set<string>();
@@ -313,7 +325,30 @@ export class WorldScene extends Phaser.Scene {
 
   private handleSeatResult(result: unknown) {
     if (!result || typeof result !== "object") return;
-    const value = result as { accepted?: boolean; action?: string; reason?: string };
+    const value = result as {
+      accepted?: boolean;
+      action?: string;
+      reason?: string;
+      seat?: { pitId?: string; seatIndex?: number };
+    };
+    if (
+      value.accepted &&
+      (value.action === "reserved" || value.action === "confirmed" || value.action === "restored") &&
+      typeof value.seat?.pitId === "string" &&
+      typeof value.seat.seatIndex === "number"
+    ) {
+      this.seatOverlayOpen = true;
+      this.callbacks.onSeatEnter?.({
+        pitId: value.seat.pitId,
+        seatIndex: value.seat.seatIndex,
+        matchAddress: this.room?.state.pits.get(value.seat.pitId)?.activeMatchId || undefined,
+        chainConfirmed: value.action === "restored",
+      });
+    }
+    if (value.accepted && value.action === "released") {
+      this.seatOverlayOpen = false;
+      this.callbacks.onSeatExit?.();
+    }
     this.interactionFeedback = value.accepted
       ? value.action === "released" ? "Seat released" : `Seat ${value.action ?? "updated"}`
       : `Seat unavailable · ${value.reason ?? "request rejected"}`;

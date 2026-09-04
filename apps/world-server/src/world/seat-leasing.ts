@@ -16,7 +16,7 @@ export type SeatLease = {
 };
 
 export type SeatActionResult =
-  | { accepted: true; action: "reserved" | "confirming" | "confirmed"; seat: SeatLease }
+  | { accepted: true; action: "reserved" | "confirming" | "confirmed" | "restored"; seat: SeatLease }
   | { accepted: false; reason: string };
 
 const keyOf = (pitId: string, seatIndex: number) => `${pitId}:${seatIndex}`;
@@ -34,12 +34,45 @@ export function parseSeatRequest(payload: unknown): { pitId: string; seatIndex: 
   return { pitId: value.pitId, seatIndex: value.seatIndex as number };
 }
 
-export function parseSeatConfirmation(payload: unknown): { confirmed: boolean } | null {
+export type SeatConfirmation = {
+  confirmed: boolean;
+  matchAddress?: string;
+  walletAddress?: string;
+};
+
+export function parseSeatConfirmation(payload: unknown): SeatConfirmation | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
-  return Object.keys(value).length === 1 && typeof value.confirmed === "boolean"
-    ? { confirmed: value.confirmed }
-    : null;
+  if (typeof value.confirmed !== "boolean") return null;
+  if (Object.keys(value).length === 1) return { confirmed: value.confirmed };
+  if (
+    value.confirmed &&
+    Object.keys(value).length === 3 &&
+    typeof value.matchAddress === "string" &&
+    value.matchAddress.length > 0 &&
+    typeof value.walletAddress === "string" &&
+    value.walletAddress.length > 0
+  ) {
+    return {
+      confirmed: true,
+      matchAddress: value.matchAddress,
+      walletAddress: value.walletAddress,
+    };
+  }
+  return null;
+}
+
+export function parseSeatReconciliation(payload: unknown): { matchAddress: string; walletAddress: string } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = payload as Record<string, unknown>;
+  if (
+    Object.keys(value).length !== 2 ||
+    typeof value.matchAddress !== "string" ||
+    value.matchAddress.length === 0 ||
+    typeof value.walletAddress !== "string" ||
+    value.walletAddress.length === 0
+  ) return null;
+  return { matchAddress: value.matchAddress, walletAddress: value.walletAddress };
 }
 
 export class SeatLeaseManager {
@@ -104,6 +137,21 @@ export class SeatLeaseManager {
     return { accepted: true, action: "confirmed", seat: { ...seat } };
   }
 
+  restoreConfirmed(sessionId: string, pitId: string, seatIndex: number): SeatActionResult {
+    const pit = this.pits.get(pitId);
+    const seat = this.seats.get(keyOf(pitId, seatIndex));
+    if (!pit || !seat) return { accepted: false, reason: "unknown_seat" };
+    if (this.sessionSeats.has(sessionId)) return { accepted: false, reason: "player_already_seated" };
+    if (seat.status !== "FREE") return { accepted: false, reason: "seat_unavailable" };
+
+    seat.status = "CONFIRMED";
+    seat.holderSessionId = sessionId;
+    seat.leaseId = `${sessionId}:restored:${++this.leaseSequence}`;
+    seat.leaseExpiresAt = 0;
+    this.sessionSeats.set(sessionId, keyOf(pitId, seatIndex));
+    return { accepted: true, action: "restored", seat: { ...seat } };
+  }
+
   releaseSession(sessionId: string): SeatLease[] {
     const key = this.sessionSeats.get(sessionId);
     if (!key) return [];
@@ -144,6 +192,12 @@ export class SeatLeaseManager {
 
   get(pitId: string, seatIndex: number) {
     const seat = this.seats.get(keyOf(pitId, seatIndex));
+    return seat ? { ...seat } : undefined;
+  }
+
+  getForSession(sessionId: string) {
+    const key = this.sessionSeats.get(sessionId);
+    const seat = key ? this.seats.get(key) : undefined;
     return seat ? { ...seat } : undefined;
   }
 

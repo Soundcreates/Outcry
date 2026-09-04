@@ -108,9 +108,133 @@ body {
   color: #ffb347;
 }
 
+.pit-overlay {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: #08090dcc;
+}
+
+.pit-panel {
+  display: grid;
+  gap: 1rem;
+  width: min(58rem, 100%);
+  max-height: calc(100svh - 4rem);
+  padding: 1.25rem;
+  overflow: auto;
+  background: #11151d;
+  border: 1px solid #46536a;
+  box-shadow: 0 1rem 4rem #0009;
+}
+
+.pit-header,
+.pit-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pit-header h2 {
+  margin: 0.25rem 0 0;
+  font-family: monospace;
+}
+
+.pit-status {
+  color: #a9b3c6;
+  font: 0.8rem monospace;
+}
+
+.pit-status-connected {
+  color: #8fe3b0;
+}
+
+.pit-status-error,
+.pit-status-disconnected {
+  color: #ffb347;
+}
+
+.pit-error {
+  margin: 0;
+  padding: 0.75rem;
+  color: #ffb3b3;
+  background: #3b1d24;
+  font: 0.8rem monospace;
+}
+
+.pit-chain-join {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  background: #1b2230;
+  border: 1px solid #46536a;
+}
+
+.pit-chain-join p {
+  margin: 0;
+  color: #d6dbea;
+}
+
+.pit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.participant-tile {
+  position: relative;
+  min-height: 9rem;
+  overflow: hidden;
+  background: #0b0b0f;
+  border: 1px solid #2b3546;
+}
+
+.participant-tile video,
+.participant-placeholder {
+  display: grid;
+  width: 100%;
+  height: 9rem;
+  place-items: center;
+  object-fit: cover;
+  color: #a9b3c6;
+  background: #1b2230;
+}
+
+.participant-tile span {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 0.35rem;
+  overflow: hidden;
+  color: #f4f1ea;
+  background: #0b0b0fcc;
+  font: 0.7rem monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pit-controls {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.pit-leave {
+  margin-left: auto;
+  color: #f4f1ea;
+  background: #7c3340;
+}
+
 @media (max-width: 640px) {
   .world-grid {
     grid-template-columns: 1fr;
+  }
+
+  .pit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

@@ -71,6 +71,20 @@ try {
   assert.equal(worldDirectory.status, 200);
   assert.equal((await worldDirectory.json()).worlds[0].id, "wall-street");
 
+  const malformedMediaRequest = await fetch(`${worldHttpUrl}/api/livekit/token`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ matchId: "wall-street-01", role: "ADMIN", sessionId: "unknown" }),
+  });
+  assert.equal(malformedMediaRequest.status, 400);
+
+  const inactiveMediaRequest = await fetch(`${worldHttpUrl}/api/livekit/token`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ matchId: "wall-street-01", role: "PLAYER", sessionId: "unknown" }),
+  });
+  assert.equal(inactiveMediaRequest.status, 403);
+
   const web = await fetch(webUrl);
   assert.equal(web.status, 200);
   assert.match(await web.text(), /<div id="root"><\/div>/);
@@ -116,6 +130,12 @@ try {
 
   const seatedRoom = player(rooms[0]).mode === "SEATED" ? rooms[0] : rooms[1];
   const seated = player(seatedRoom);
+  const mediaRequest = await fetch(`${worldHttpUrl}/api/livekit/token`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ matchId: "wall-street-01", role: "PLAYER", sessionId: seatedRoom.sessionId }),
+  });
+  assert.ok(mediaRequest.status === 200 || mediaRequest.status === 503);
   const seatedPosition = { x: seated.x, y: seated.y };
   sendInput(seatedRoom, { right: true });
   await wait(200);
@@ -153,7 +173,7 @@ try {
     assert.deepEqual({ x: player(rooms[3]).x, y: player(rooms[3]).y }, reconnectBefore);
   }
 
-  console.log("world integration: health, Vite assets, 4-player presence, authority, race, lock, expiry, release, and 20/20 reconnect pass");
+  console.log(`world integration: health, Vite assets, 4-player presence, authority, race, lock, expiry, release, media token ${mediaRequest.status}, and 20/20 reconnect pass`);
 } finally {
   await Promise.allSettled(rooms.map((room) => room.leave()));
 }

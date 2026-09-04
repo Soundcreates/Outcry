@@ -4,16 +4,22 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node --import tsx src/index.ts",
-    "start": "node --import tsx src/index.ts",
+    "dev": "node --env-file=../../.env --import tsx src/index.ts",
+    "start": "node --env-file=../../.env --import tsx src/index.ts",
     "lint": "node ../../tools/lint.mjs",
     "typecheck": "pnpm exec tsc -p tsconfig.json",
     "test": "node --import tsx src/world/world.test.ts"
   },
   "dependencies": {
     "@colyseus/schema": "5.0.27",
-    "colyseus": "0.18.5",
     "@outcry/shared": "workspace:*",
+    "@solana/web3.js": "1.98.4",
+    "colyseus": "0.18.5",
+    "express": "5.2.1",
+    "livekit-server-sdk": "2.18.0",
     "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3"
   }
 }
