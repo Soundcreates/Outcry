@@ -1,0 +1,22 @@
+{
+  "name": "outcry",
+  "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "lint": "node tools/lint.mjs",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "test": "node tools/run-tests.mjs",
+    "test:phase0": "node tools/phase-00.mjs",
+    "test:world": "node tests/world/map-validator.test.mjs",
+    "validate:maps": "node tools/validate-maps.mjs",
+    "test:program": "node tests/program/smoke.test.mjs",
+    "test:gate": "node tools/phase-00.mjs",
+    "dev:web": "pnpm --filter @outcry/web dev",
+    "dev:world": "pnpm --filter @outcry/world-server dev"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "tsx": "4.20.3",
+    "typescript": "5.9.2"
+  }
+}

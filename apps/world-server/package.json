@@ -1,0 +1,17 @@
+{
+  "name": "@outcry/world-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "lint": "node ../../tools/lint.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@colyseus/schema": "3.0.0",
+    "colyseus": "0.18.5",
+    "@outcry/shared": "workspace:*"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "columns": 4,
+  "image": "assets/floor.svg",
+  "imageheight": 32,
+  "imagewidth": 128,
+  "margin": 0,
+  "name": "outcry-floor",
+  "spacing": 0,
+  "tilecount": 4,
+  "tileheight": 32,
+  "tilewidth": 32,
+  "tiledversion": "1.10.2",
+  "type": "tileset",
+  "version": "1.10"
+}
+

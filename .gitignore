@@ -1,0 +1,10 @@
+docs/*
+!docs/
+!docs/AUTHORITY.md
+node_modules
+target
+dist
+.next
+.env
+artifacts
+*.md

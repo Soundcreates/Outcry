@@ -1,0 +1,16 @@
+{
+  "name": "@outcry/shared",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./domain": "./src/domain.ts",
+    "./env": "./src/env.ts"
+  },
+  "dependencies": {
+    "zod": "4.0.5"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
