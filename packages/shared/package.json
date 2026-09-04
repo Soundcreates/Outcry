@@ -5,12 +5,14 @@
   "type": "module",
   "exports": {
     "./domain": "./src/domain.ts",
-    "./env": "./src/env.ts"
+    "./env": "./src/env.ts",
+    "./world-state": "./src/world-state.ts"
   },
   "dependencies": {
-    "zod": "4.0.5"
+    "@colyseus/schema": "5.0.27",
+    "zod": "4.5.4"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "pnpm exec tsc -p tsconfig.json"
   }
 }

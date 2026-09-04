@@ -4,14 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "node --import tsx src/index.ts",
+    "start": "node --import tsx src/index.ts",
     "lint": "node ../../tools/lint.mjs",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "pnpm exec tsc -p tsconfig.json",
+    "test": "node --import tsx src/world/world.test.ts"
   },
   "dependencies": {
-    "@colyseus/schema": "3.0.0",
+    "@colyseus/schema": "5.0.27",
     "colyseus": "0.18.5",
-    "@outcry/shared": "workspace:*"
+    "@outcry/shared": "workspace:*",
+    "zod": "4.5.4"
   }
 }

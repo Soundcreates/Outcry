@@ -8,6 +8,7 @@
     "test": "node tools/run-tests.mjs",
     "test:phase0": "node tools/phase-00.mjs",
     "test:world": "node tests/world/map-validator.test.mjs",
+    "test:integration": "pnpm --filter @outcry/web test:integration",
     "validate:maps": "node tools/validate-maps.mjs",
     "test:program": "node tests/program/smoke.test.mjs",
     "test:gate": "node tools/phase-00.mjs",

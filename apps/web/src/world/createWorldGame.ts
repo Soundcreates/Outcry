@@ -1,7 +1,11 @@
 import Phaser from "phaser";
+import type { Room } from "@colyseus/sdk";
+import type { WorldState } from "@outcry/shared/world-state";
 import { WorldScene } from "./WorldScene";
 
-export function createWorldGame(parent: HTMLElement, worldId: string) {
+export type WorldRoom = Room<any, WorldState>;
+
+export function createWorldGame(parent: HTMLElement, worldId: string, room?: WorldRoom) {
   return new Phaser.Game({
     type: Phaser.AUTO,
     parent,
@@ -17,6 +21,6 @@ export function createWorldGame(parent: HTMLElement, worldId: string) {
       default: "arcade",
       arcade: { debug: false },
     },
-    scene: [new WorldScene(worldId)],
+    scene: [new WorldScene(worldId, room)],
   });
 }

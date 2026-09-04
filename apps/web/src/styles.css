@@ -88,6 +88,26 @@ body {
   left: 1rem;
 }
 
+.world-connection {
+  position: absolute;
+  z-index: 10;
+  top: 1rem;
+  right: 1rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  color: #f4f1ea;
+  background: #0b0b0fcc;
+  font: 0.75rem monospace;
+}
+
+.world-connection-connected {
+  color: #8fe3b0;
+}
+
+.world-connection-offline {
+  color: #ffb347;
+}
+
 @media (max-width: 640px) {
   .world-grid {
     grid-template-columns: 1fr;

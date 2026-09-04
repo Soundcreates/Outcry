@@ -1,13 +1,51 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import WorldCanvas from "./world/WorldCanvas";
 
-const worlds = [
-  { id: "wall-street", name: "Wall Street", online: 26, pits: 2, ready: true },
-  { id: "tokyo-night", name: "Tokyo Night", online: 11, pits: 1, ready: false },
-] as const;
+type WorldCard = {
+  id: string;
+  name: string;
+  online: number;
+  pits: number;
+  ready: boolean;
+};
+
+const initialWorlds: WorldCard[] = [
+  { id: "wall-street", name: "Wall Street", online: 0, pits: 2, ready: true },
+  { id: "tokyo-night", name: "Tokyo Night", online: 0, pits: 0, ready: false },
+];
+
+const worldHttp = import.meta.env.VITE_WORLD_HTTP ||
+  (import.meta.env.VITE_WORLD_WS || "ws://localhost:2567").replace(/^ws/, "http");
 
 export default function App() {
   const [worldId, setWorldId] = useState<string | null>(null);
+  const [worlds, setWorlds] = useState(initialWorlds);
+
+  useEffect(() => {
+    let active = true;
+    const refreshWorlds = async () => {
+      try {
+        const response = await fetch(`${worldHttp}/api/worlds`);
+        if (!response.ok) return;
+        const payload = await response.json() as { worlds?: Array<{ id: string; online: number; activePits: number }> };
+        if (!active || !Array.isArray(payload.worlds)) return;
+        const stats = new Map(payload.worlds.map((world) => [world.id, world]));
+        setWorlds((current) => current.map((world) => {
+          const stat = stats.get(world.id);
+          return stat ? { ...world, online: stat.online, pits: stat.activePits } : world;
+        }));
+      } catch {
+        // The card remains honest at zero while the world server is offline.
+      }
+    };
+
+    void refreshWorlds();
+    const interval = window.setInterval(refreshWorlds, 3_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   if (worldId) {
     return <WorldCanvas worldId={worldId} onExit={() => setWorldId(null)} />;
