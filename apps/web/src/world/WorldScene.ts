@@ -1,6 +1,16 @@
 import Phaser from "phaser";
 import type { PlayerState, WorldState } from "@outcry/shared/world-state";
 import type { WorldRoom } from "./createWorldGame";
+import avatar01 from "../../../../avatar_images/avatar_01.png";
+import avatar02 from "../../../../avatar_images/avatar_02.png";
+import avatar03 from "../../../../avatar_images/avatar_03.png";
+import avatar04 from "../../../../avatar_images/avatar_04.png";
+import avatar05 from "../../../../avatar_images/avatar_05.png";
+import avatar06 from "../../../../avatar_images/avatar_06.png";
+import avatar07 from "../../../../avatar_images/avatar_07.png";
+import avatar08 from "../../../../avatar_images/avatar_08.png";
+import avatar09 from "../../../../avatar_images/avatar_09.png";
+import avatar10 from "../../../../avatar_images/avatar_10.png";
 
 const PLAYER_SPEED = 150;
 const DECOR_COLLISIONS = {
@@ -11,7 +21,19 @@ const DECOR_COLLISIONS = {
   lamp: { width: 14, height: 12 },
 } as const;
 
-type Direction = "down" | "left" | "right" | "up";
+const AVATAR_IMAGES = [
+  avatar01,
+  avatar02,
+  avatar03,
+  avatar04,
+  avatar05,
+  avatar06,
+  avatar07,
+  avatar08,
+  avatar09,
+  avatar10,
+] as const;
+
 type RemotePlayer = {
   sprite: Phaser.GameObjects.Sprite;
   targetX: number;
@@ -62,10 +84,7 @@ export class WorldScene extends Phaser.Scene {
     for (const asset of ["tree", "bench", "bin", "dust", "planter", "lamp"]) {
       this.load.image(asset, `/${this.mapSlug}/assets/${asset}.svg`);
     }
-    this.load.spritesheet("trader", "/sprites/trader.svg", {
-      frameWidth: 32,
-      frameHeight: 48,
-    });
+    AVATAR_IMAGES.forEach((image, index) => this.load.image(`avatar-${index}`, image));
   }
 
   create() {
@@ -108,8 +127,7 @@ export class WorldScene extends Phaser.Scene {
       const wall = collisionBodies.create(
         x + width / 2,
         y + height / 2,
-        "trader",
-        0,
+        "avatar-0",
       );
       wall.setVisible(false).setDisplaySize(width, height);
       wall.refreshBody();
@@ -119,8 +137,7 @@ export class WorldScene extends Phaser.Scene {
       const blocker = collisionBodies.create(
         (pit.x ?? 0) + (pit.width ?? 0) / 2,
         (pit.y ?? 0) + (pit.height ?? 0) / 2,
-        "trader",
-        0,
+        "avatar-0",
       );
       blocker
         .setVisible(false)
@@ -129,7 +146,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     for (const seat of seats) {
-      const blocker = collisionBodies.create(seat.x ?? 0, seat.y ?? 0, "trader", 0);
+      const blocker = collisionBodies.create(seat.x ?? 0, seat.y ?? 0, "avatar-0");
       blocker.setVisible(false).setDisplaySize(18, 18).refreshBody();
     }
 
@@ -145,8 +162,7 @@ export class WorldScene extends Phaser.Scene {
       const blocker = collisionBodies.create(
         object.x ?? 0,
         (object.y ?? 0) - size.height / 2,
-        "trader",
-        0,
+        "avatar-0",
       );
       blocker.setVisible(false).setDisplaySize(size.width, size.height).refreshBody();
     }
@@ -154,7 +170,11 @@ export class WorldScene extends Phaser.Scene {
     const spawn = map.getObjectLayer("objects_spawn")?.objects[0];
     if (!spawn) throw new Error("Map has no spawn point");
 
-    this.player = this.physics.add.sprite(spawn.x ?? 0, spawn.y ?? 0, "trader", 0);
+    this.player = this.physics.add.sprite(
+      spawn.x ?? 0,
+      spawn.y ?? 0,
+      this.avatarTexture(this.room?.sessionId ?? "preview"),
+    );
     this.player.setBodySize(18, 24, true);
     this.player.setCollideWorldBounds(true);
     this.physics.add.collider(this.player, collisionBodies);
@@ -167,7 +187,6 @@ export class WorldScene extends Phaser.Scene {
       this.syncServerState(this.room.state);
     }
     map.createLayer("above_player", tileset, 0, 0);
-    this.createAnimations();
     this.cursors = this.input.keyboard?.createCursorKeys();
     this.wasd = this.input.keyboard?.addKeys("W,A,S,D") as typeof this.wasd;
     this.interactKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.E);
@@ -220,21 +239,18 @@ export class WorldScene extends Phaser.Scene {
 
     if (!canMove) {
       this.player.setVelocity(0, 0);
-      this.player.anims.stop();
       this.updateRemotePlayers();
       return;
     }
 
     if (velocity.lengthSq() === 0) {
       this.player.setVelocity(0, 0);
-      this.player.anims.stop();
       this.updateRemotePlayers();
       return;
     }
 
     velocity.normalize().scale(PLAYER_SPEED);
     this.player.setVelocity(velocity.x, velocity.y);
-    this.player.anims.play(`walk-${this.direction(velocity.x, velocity.y)}`, true);
     this.updateRemotePlayers();
   }
 
@@ -264,7 +280,7 @@ export class WorldScene extends Phaser.Scene {
       }
 
       this.remotePlayers.set(sessionId, {
-        sprite: this.add.sprite(player.x, player.y, "trader", 0).setDepth(player.y),
+        sprite: this.add.sprite(player.x, player.y, this.avatarTexture(sessionId)).setDepth(player.y),
         targetX: player.x,
         targetY: player.y,
       });
@@ -372,9 +388,10 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private direction(x: number, y: number): Direction {
-    if (Math.abs(x) > Math.abs(y)) return x < 0 ? "left" : "right";
-    return y < 0 ? "up" : "down";
+  private avatarTexture(sessionId: string) {
+    let hash = 0;
+    for (const character of sessionId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+    return `avatar-${hash % AVATAR_IMAGES.length}`;
   }
 
   private renderDecor(objects: Phaser.Types.Tilemaps.TiledObject[]) {
@@ -390,23 +407,6 @@ export class WorldScene extends Phaser.Scene {
       } else {
         image.setOrigin(0.5, 1).setDepth(object.y ?? 0);
       }
-    }
-  }
-
-  private createAnimations() {
-    const ranges: Record<Direction, [number, number]> = {
-      down: [0, 3],
-      left: [4, 7],
-      right: [8, 11],
-      up: [12, 15],
-    };
-    for (const [direction, [start, end]] of Object.entries(ranges) as [Direction, [number, number]][]) {
-      this.anims.create({
-        key: `walk-${direction}`,
-        frames: this.anims.generateFrameNumbers("trader", { start, end }),
-        frameRate: 8,
-        repeat: -1,
-      });
     }
   }
 

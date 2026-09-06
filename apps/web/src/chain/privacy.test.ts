@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Keypair } from "@solana/web3.js";
+import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import {
   assertPrivateReadAccess,
   canReadPrivateAccount,
+  createDelegatePrivateInventoryInstruction,
+  createInitializePrivateInventoryInstruction,
+  createInitPrivateInventoryPermissionInstruction,
   createPrivateConnection,
   PRIVATE_EXECUTOR,
   privateInventoryPda,
@@ -133,12 +137,33 @@ await assert.rejects(
   readOwnPrivateInventory({ connection: publicFallbackConnection, matchAddress: match, player: alice, programId: program }),
   /private_inventory_account_invalid/,
 );
+const delegatedInventoryConnection = {
+  getAccountInfo: async () => ({ owner: DELEGATION_PROGRAM_ID, data: inventoryData }),
+} as never;
+const delegatedInventory = await readOwnPrivateInventory({ connection: delegatedInventoryConnection, matchAddress: match, player: alice, programId: program });
+assert.equal(delegatedInventory.playerAddress, alice.toBase58());
+
+const initializeInventory = createInitializePrivateInventoryInstruction({ matchAddress: match, player: alice, programId: program });
+assert.equal(initializeInventory.keys[0].pubkey.equals(aliceInventory.account), true);
+assert.equal(initializeInventory.keys[2].isSigner, true);
+const delegateInventory = createDelegatePrivateInventoryInstruction({ matchAddress: match, player: alice, validator: bob, programId: program });
+assert.equal(delegateInventory.keys[4].pubkey.equals(aliceInventory.account), true);
+assert.equal(delegateInventory.keys[5].pubkey.equals(bob), true);
+assert.equal(delegateInventory.keys[7].pubkey.equals(DELEGATION_PROGRAM_ID), true);
+assert.equal(delegateInventory.data.length, 72);
+const initializeInventoryPermission = createInitPrivateInventoryPermissionInstruction({ matchAddress: match, player: alice, programId: program });
+assert.equal(initializeInventoryPermission.keys[1].pubkey.equals(aliceInventory.account), true);
+assert.equal(initializeInventoryPermission.keys[2].pubkey.equals(privatePermissionPda(aliceInventory.account)), true);
+
 const privateQuotePanelSource = await readFile(new URL("../match/PrivateQuotePanel.tsx", import.meta.url), "utf8");
+const privateInventoryPanelSource = await readFile(new URL("../match/PrivateInventoryPanel.tsx", import.meta.url), "utf8");
 assert.match(privateQuotePanelSource, /Only your quote is sent through the TEE/);
 assert.match(privateQuotePanelSource, /private_quote_failed/);
 assert.match(privateQuotePanelSource, /Submit private quote/);
 assert.match(privateQuotePanelSource, /setStatus\("error"\)/);
 assert.match(privateQuotePanelSource, /onClick=\{\(\) => void submit\(\)\}/);
 assert.doesNotMatch(privateQuotePanelSource, /new Connection|VITE_SOLANA_RPC|NEXT_PUBLIC_SOLANA_RPC/);
+assert.match(privateInventoryPanelSource, /unlockPrivateInventory/);
+assert.match(privateInventoryPanelSource, /VITE_SOLANA_BASE_RPC/);
 
 console.log("privacy boundary: 800 matrix assertions + Alice/Bob/spectator attack denials + TEE fail-closed/retry boundary pass");

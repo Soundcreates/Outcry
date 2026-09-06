@@ -1,9 +1,22 @@
 import {
+  DELEGATION_PROGRAM_ID,
+  EPHEMERAL_VAULT_ID,
   getAuthToken,
+  MAGIC_PROGRAM_ID,
+  PERMISSION_PROGRAM_ID,
+  delegateBufferPdaFromDelegatedAccountAndOwnerProgram,
+  delegationMetadataPdaFromDelegatedAccount,
+  delegationRecordPdaFromDelegatedAccount,
   permissionPdaFromAccount,
   verifyTeeRpcIntegrity,
 } from "@magicblock-labs/ephemeral-rollups-sdk";
-import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import outcryIdl from "./idl/outcry.json";
 
 export const PRIVATE_EXECUTOR = "PER_EXECUTOR" as const;
@@ -38,6 +51,19 @@ export type PrivateQuoteSnapshot = {
 const PROGRAM_ID = new PublicKey(outcryIdl.address);
 const PRIVATE_INVENTORY_DISCRIMINATOR = Uint8Array.from(outcryIdl.accounts.find((account) => account.name === "PrivateInventory")?.discriminator ?? []);
 const PRIVATE_QUOTE_DISCRIMINATOR = Uint8Array.from(outcryIdl.accounts.find((account) => account.name === "PrivateQuote")?.discriminator ?? []);
+const INITIALIZE_PRIVATE_INVENTORY_DISCRIMINATOR = instructionDiscriminator("initialize_private_inventory");
+const DELEGATE_PRIVATE_INVENTORY_DISCRIMINATOR = instructionDiscriminator("delegate_private_inventory");
+const INIT_PRIVATE_INVENTORY_PERMISSION_DISCRIMINATOR = instructionDiscriminator("init_private_inventory_permission");
+
+// MagicBlock's documented Devnet TEE validator for devnet-tee.magicblock.app.
+const DEVNET_TEE_VALIDATOR = new PublicKey("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo");
+
+export type PrivateInventoryWallet = {
+  publicKey: PublicKey | null;
+  signMessage?: (message: Uint8Array) => Promise<Uint8Array | { signature: Uint8Array }>;
+  signTransaction?: (transaction: Transaction) => Promise<Transaction>;
+  signAndSendTransaction?: (transaction: Transaction) => Promise<string | { signature: string }>;
+};
 
 export function privateQuotePda(input: {
   matchAddress: PublicKey;
@@ -147,9 +173,243 @@ function assertPrivateAccount(input: {
   length: number;
   label: string;
 }) {
-  if (!input.owner.equals(input.programId) || input.data.length < input.length || !sameBytes(input.data.slice(0, 8), input.discriminator)) {
+  // Delegated MagicBlock accounts are owned by the delegation program until they
+  // are committed and undelegated; the original program remains the only other
+  // valid owner for this private reader.
+  const validOwner = input.owner.equals(input.programId) || input.owner.equals(DELEGATION_PROGRAM_ID);
+  if (!validOwner || input.data.length < input.length || !sameBytes(input.data.slice(0, 8), input.discriminator)) {
     throw new Error(`${input.label}_account_invalid`);
   }
+}
+
+export function createInitializePrivateInventoryInstruction(input: {
+  matchAddress: PublicKey;
+  player: PublicKey;
+  programId?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  const inventory = privateInventoryPda({ matchAddress: input.matchAddress, player: input.player, programId });
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: inventory, isWritable: true, isSigner: false },
+      { pubkey: input.matchAddress, isWritable: false, isSigner: false },
+      { pubkey: input.player, isWritable: true, isSigner: true },
+      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+    ],
+    data: Buffer.from(INITIALIZE_PRIVATE_INVENTORY_DISCRIMINATOR),
+  });
+}
+
+export function createDelegatePrivateInventoryInstruction(input: {
+  matchAddress: PublicKey;
+  player: PublicKey;
+  validator: PublicKey;
+  programId?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  const inventory = privateInventoryPda({ matchAddress: input.matchAddress, player: input.player, programId });
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: input.player, isWritable: false, isSigner: true },
+      { pubkey: delegateBufferPdaFromDelegatedAccountAndOwnerProgram(inventory, programId), isWritable: true, isSigner: false },
+      { pubkey: delegationRecordPdaFromDelegatedAccount(inventory), isWritable: true, isSigner: false },
+      { pubkey: delegationMetadataPdaFromDelegatedAccount(inventory), isWritable: true, isSigner: false },
+      { pubkey: inventory, isWritable: true, isSigner: false },
+      { pubkey: input.validator, isWritable: false, isSigner: false },
+      { pubkey: programId, isWritable: false, isSigner: false },
+      { pubkey: DELEGATION_PROGRAM_ID, isWritable: false, isSigner: false },
+      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+    ],
+    data: Buffer.from([
+      ...DELEGATE_PRIVATE_INVENTORY_DISCRIMINATOR,
+      ...input.matchAddress.toBytes(),
+      ...input.player.toBytes(),
+    ]),
+  });
+}
+
+export function createInitPrivateInventoryPermissionInstruction(input: {
+  matchAddress: PublicKey;
+  player: PublicKey;
+  programId?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  const inventory = privateInventoryPda({ matchAddress: input.matchAddress, player: input.player, programId });
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: input.player, isWritable: true, isSigner: true },
+      { pubkey: inventory, isWritable: true, isSigner: false },
+      { pubkey: privatePermissionPda(inventory), isWritable: true, isSigner: false },
+      { pubkey: PERMISSION_PROGRAM_ID, isWritable: false, isSigner: false },
+      { pubkey: EPHEMERAL_VAULT_ID, isWritable: true, isSigner: false },
+      { pubkey: MAGIC_PROGRAM_ID, isWritable: false, isSigner: false },
+    ],
+    data: Buffer.from(INIT_PRIVATE_INVENTORY_PERMISSION_DISCRIMINATOR),
+  });
+}
+
+export async function unlockPrivateInventory(input: {
+  baseRpcUrl: string;
+  teeRpcUrl: string;
+  matchAddress: PublicKey;
+  player: PublicKey;
+  wallet: PrivateInventoryWallet;
+  programId?: PublicKey;
+  teeValidator?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  if (!input.wallet.publicKey?.equals(input.player)) throw new Error("private_inventory_wallet_mismatch");
+  if (!input.wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
+  const inventory = privateInventoryPda({ matchAddress: input.matchAddress, player: input.player, programId });
+  const baseConnection = new Connection(input.baseRpcUrl, "confirmed");
+  const baseInventory = await baseConnection.getAccountInfo(inventory, "confirmed");
+  let delegatedNow = false;
+
+  if (!baseInventory) {
+    await sendWalletTransaction({
+      connection: baseConnection,
+      wallet: input.wallet,
+      payer: input.player,
+      label: "private_inventory_setup",
+      instructions: [
+        createInitializePrivateInventoryInstruction({ matchAddress: input.matchAddress, player: input.player, programId }),
+        createDelegatePrivateInventoryInstruction({
+          matchAddress: input.matchAddress,
+          player: input.player,
+          validator: input.teeValidator ?? validatorForTeeRpc(input.teeRpcUrl),
+          programId,
+        }),
+      ],
+    });
+    delegatedNow = true;
+  } else {
+    assertPrivateInventoryIdentity(baseInventory.data, input.matchAddress, input.player);
+    if (baseInventory.owner.equals(programId)) {
+      await sendWalletTransaction({
+        connection: baseConnection,
+        wallet: input.wallet,
+        payer: input.player,
+        label: "private_inventory_delegation",
+        instructions: [createDelegatePrivateInventoryInstruction({
+          matchAddress: input.matchAddress,
+          player: input.player,
+          validator: input.teeValidator ?? validatorForTeeRpc(input.teeRpcUrl),
+          programId,
+        })],
+      });
+      delegatedNow = true;
+    } else if (!baseInventory.owner.equals(DELEGATION_PROGRAM_ID)) {
+      throw new Error("private_inventory_account_invalid");
+    }
+  }
+
+  let session = await createPrivateConnection({
+    teeRpcUrl: input.teeRpcUrl,
+    publicKey: input.player,
+    signMessage: async (message) => signedMessage(input.wallet, message),
+  });
+  if (delegatedNow) {
+    await initializePrivateInventoryPermission({ connection: session.connection, wallet: input.wallet, matchAddress: input.matchAddress, player: input.player, programId });
+    session = await createPrivateConnection({
+      teeRpcUrl: input.teeRpcUrl,
+      publicKey: input.player,
+      signMessage: async (message) => signedMessage(input.wallet, message),
+    });
+  }
+
+  try {
+    return await readOwnPrivateInventory({ connection: session.connection, matchAddress: input.matchAddress, player: input.player, programId });
+  } catch (reason) {
+    if (delegatedNow || !(reason instanceof Error) || reason.message !== "private_inventory_unavailable") throw reason;
+    await initializePrivateInventoryPermission({ connection: session.connection, wallet: input.wallet, matchAddress: input.matchAddress, player: input.player, programId });
+    const refreshed = await createPrivateConnection({
+      teeRpcUrl: input.teeRpcUrl,
+      publicKey: input.player,
+      signMessage: async (message) => signedMessage(input.wallet, message),
+    });
+    return readOwnPrivateInventory({ connection: refreshed.connection, matchAddress: input.matchAddress, player: input.player, programId });
+  }
+}
+
+function instructionDiscriminator(name: string) {
+  const instruction = outcryIdl.instructions.find((value) => value.name === name);
+  if (!instruction) throw new Error(`outcry_idl_missing_${name}`);
+  return Uint8Array.from(instruction.discriminator);
+}
+
+function validatorForTeeRpc(teeRpcUrl: string) {
+  if (new URL(teeRpcUrl).hostname === "devnet-tee.magicblock.app") return DEVNET_TEE_VALIDATOR;
+  throw new Error("tee_validator_unconfigured");
+}
+
+function signedMessage(wallet: PrivateInventoryWallet, message: Uint8Array) {
+  if (!wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
+  return wallet.signMessage(message).then((signed) => signed instanceof Uint8Array ? signed : signed.signature);
+}
+
+function assertPrivateInventoryIdentity(data: Uint8Array, matchAddress: PublicKey, player: PublicKey) {
+  if (data.length < 129 || !sameBytes(data.slice(0, 8), PRIVATE_INVENTORY_DISCRIMINATOR)
+    || !new PublicKey(data.slice(8, 40)).equals(matchAddress)
+    || !new PublicKey(data.slice(40, 72)).equals(player)) {
+    throw new Error("private_inventory_account_invalid");
+  }
+}
+
+async function initializePrivateInventoryPermission(input: {
+  connection: Connection;
+  wallet: PrivateInventoryWallet;
+  matchAddress: PublicKey;
+  player: PublicKey;
+  programId: PublicKey;
+}) {
+  await sendWalletTransaction({
+    connection: input.connection,
+    wallet: input.wallet,
+    payer: input.player,
+    label: "private_inventory_permission",
+    instructions: [createInitPrivateInventoryPermissionInstruction(input)],
+    requireSignTransaction: true,
+  });
+}
+
+async function sendWalletTransaction(input: {
+  connection: Connection;
+  wallet: PrivateInventoryWallet;
+  payer: PublicKey;
+  label: string;
+  instructions: TransactionInstruction[];
+  requireSignTransaction?: boolean;
+}) {
+  if (input.requireSignTransaction && !input.wallet.signTransaction) throw new Error("wallet_transaction_signing_unavailable");
+  if (!input.wallet.signTransaction && !input.wallet.signAndSendTransaction) throw new Error("wallet_transaction_signing_unavailable");
+  const transaction = new Transaction().add(...input.instructions);
+  transaction.feePayer = input.payer;
+  const blockhash = await input.connection.getLatestBlockhash("confirmed");
+  transaction.recentBlockhash = blockhash.blockhash;
+  transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
+  const simulation = await input.connection.simulateTransaction(transaction);
+  if (simulation.value.err) {
+    const relevantLog = simulation.value.logs?.find((log) => /Error|failed|constraint|missing|insufficient/i.test(log));
+    throw new Error(`${input.label}_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
+  }
+  let signature: string;
+  if (input.wallet.signTransaction) {
+    const signed = await input.wallet.signTransaction(transaction);
+    signature = await input.connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 5 });
+  } else {
+    const sent = await input.wallet.signAndSendTransaction!(transaction);
+    signature = typeof sent === "string" ? sent : sent.signature;
+  }
+  const confirmation = await input.connection.confirmTransaction({
+    signature,
+    blockhash: blockhash.blockhash,
+    lastValidBlockHeight: blockhash.lastValidBlockHeight,
+  }, "confirmed");
+  if (confirmation.value.err) throw new Error(`${input.label}_transaction_failed: ${JSON.stringify(confirmation.value.err)}`);
+  return signature;
 }
 
 export async function readOwnPrivateInventory(input: {
