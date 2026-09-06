@@ -1,13 +1,19 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 
-const MATCH_ACCOUNT_BYTES = 372;
+// Devnet currently contains a legacy Match without the trailing bump byte (372).
+// Newer builds allocate 373; all fields used here end before that optional byte.
+const MATCH_ACCOUNT_BYTES = new Set([372, 373]);
 const MATCH_ACCOUNT_DISCRIMINATOR = Buffer.from([236, 63, 169, 38, 15, 56, 196, 162]);
 const MATCH_STATUS_OFFSET = 80;
 const MATCH_CAPACITY_OFFSET = 81;
 const MATCH_PLAYER_COUNT_OFFSET = 82;
-const MATCH_PLAYERS_OFFSET = 83;
-const MATCH_SEATS_OFFSET = 211;
+const MATCH_LEGACY_PLAYERS_OFFSET = 83;
+const MATCH_LEGACY_SEATS_OFFSET = 211;
+const MATCH_CURRENT_PLAYERS_OFFSET = 84;
+const MATCH_CURRENT_SEATS_OFFSET = 212;
 const MAX_PLAYERS = 4;
+const MEMBERSHIP_READ_ATTEMPTS = 4;
+const MEMBERSHIP_READ_DELAY_MS = 250;
 
 export type MatchMembershipRequest = {
   matchAddress: string;
@@ -16,8 +22,28 @@ export type MatchMembershipRequest = {
 };
 
 export type MatchMembershipReader = {
+  isMatchReady(matchAddress: string): Promise<boolean>;
   isConfirmed(input: MatchMembershipRequest): Promise<boolean>;
 };
+
+export function isValidMatchAccount(
+  account: { owner: PublicKey; data: Buffer } | null,
+  programId: PublicKey,
+) {
+  if (!account) return false;
+  return account.owner.equals(programId)
+    && MATCH_ACCOUNT_BYTES.has(account.data.length)
+    && account.data.subarray(0, 8).equals(MATCH_ACCOUNT_DISCRIMINATOR);
+}
+
+export function isMatchMemberAtSeat(data: Buffer, walletAddress: PublicKey, seatIndex: number) {
+  if (seatIndex < 0 || seatIndex >= MAX_PLAYERS || !MATCH_ACCOUNT_BYTES.has(data.length)) return false;
+  const playersOffset = data.length === 373 ? MATCH_CURRENT_PLAYERS_OFFSET : MATCH_LEGACY_PLAYERS_OFFSET;
+  const seatsOffset = data.length === 373 ? MATCH_CURRENT_SEATS_OFFSET : MATCH_LEGACY_SEATS_OFFSET;
+  const player = new PublicKey(data.subarray(playersOffset + seatIndex * 32, playersOffset + (seatIndex + 1) * 32));
+  const seat = new PublicKey(data.subarray(seatsOffset + seatIndex * 32, seatsOffset + (seatIndex + 1) * 32));
+  return player.equals(walletAddress) && seat.equals(walletAddress);
+}
 
 export class SolanaMatchMembershipReader implements MatchMembershipReader {
   private readonly connection: Connection;
@@ -28,35 +54,51 @@ export class SolanaMatchMembershipReader implements MatchMembershipReader {
     this.programId = new PublicKey(programId);
   }
 
+  async isMatchReady(matchAddress: string) {
+    const account = await this.readValidMatchAccount(matchAddress);
+    return Boolean(account);
+  }
+
   async isConfirmed(input: MatchMembershipRequest) {
     if (!Number.isInteger(input.seatIndex) || input.seatIndex < 0 || input.seatIndex >= MAX_PLAYERS) return false;
 
-    let matchAddress: PublicKey;
     let walletAddress: PublicKey;
     try {
-      matchAddress = new PublicKey(input.matchAddress);
+      new PublicKey(input.matchAddress);
       walletAddress = new PublicKey(input.walletAddress);
     } catch {
       return false;
     }
 
-    let account;
-    try {
-      account = await this.connection.getAccountInfo(matchAddress, "confirmed");
-    } catch {
-      return false;
+    // ponytail: bounded retry covers RPC commitment propagation; use account subscriptions if this becomes a high-throughput service.
+    for (let attempt = 0; attempt < MEMBERSHIP_READ_ATTEMPTS; attempt += 1) {
+      const account = await this.readValidMatchAccount(input.matchAddress);
+      if (account) {
+        const playerCount = account.data.readUInt8(MATCH_PLAYER_COUNT_OFFSET);
+        const capacity = account.data.readUInt8(MATCH_CAPACITY_OFFSET);
+        const status = account.data.readUInt8(MATCH_STATUS_OFFSET);
+        if ((status !== 0 && status !== 1) || playerCount === 0 || playerCount > MAX_PLAYERS || capacity === 0 || capacity > MAX_PLAYERS || capacity < playerCount) return false;
+        if (isMatchMemberAtSeat(account.data, walletAddress, input.seatIndex)) return true;
+      }
+      if (attempt + 1 < MEMBERSHIP_READ_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, MEMBERSHIP_READ_DELAY_MS));
     }
-    if (!account || !account.owner.equals(this.programId) || account.data.length !== MATCH_ACCOUNT_BYTES) return false;
-    if (!account.data.subarray(0, 8).equals(MATCH_ACCOUNT_DISCRIMINATOR)) return false;
+    return false;
+  }
 
-    const playerCount = account.data.readUInt8(MATCH_PLAYER_COUNT_OFFSET);
-    const capacity = account.data.readUInt8(MATCH_CAPACITY_OFFSET);
-    const status = account.data.readUInt8(MATCH_STATUS_OFFSET);
-    if ((status !== 0 && status !== 1) || playerCount === 0 || playerCount > MAX_PLAYERS || capacity === 0 || capacity > MAX_PLAYERS || capacity < playerCount) return false;
+  private async readValidMatchAccount(matchAddress: string) {
+    let address: PublicKey;
+    try {
+      address = new PublicKey(matchAddress);
+    } catch {
+      return null;
+    }
 
-    const player = new PublicKey(account.data.subarray(MATCH_PLAYERS_OFFSET + input.seatIndex * 32, MATCH_PLAYERS_OFFSET + (input.seatIndex + 1) * 32));
-    const seat = new PublicKey(account.data.subarray(MATCH_SEATS_OFFSET + input.seatIndex * 32, MATCH_SEATS_OFFSET + (input.seatIndex + 1) * 32));
-    return player.equals(walletAddress) && seat.equals(walletAddress);
+    try {
+      const account = await this.connection.getAccountInfo(address, "confirmed");
+      return isValidMatchAccount(account, this.programId) ? account : null;
+    } catch {
+      return null;
+    }
   }
 }
 

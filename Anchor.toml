@@ -5,11 +5,11 @@ anchor_version = "1.0.2"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
+[programs.devnet]
 outcry = "D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt"
 
 [provider]
-cluster = "Localnet"
+cluster = "https://solana-devnet.g.alchemy.com/v2/uFp3rRJkzmqosOBGtDM6cYysYH0WmufN"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

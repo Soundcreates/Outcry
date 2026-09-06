@@ -39,13 +39,13 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const env = readServerEnv();
     this.activeMatchAddress = env.OUTCRY_MATCH_ADDRESS ?? "";
     this.membershipReader = createMatchMembershipReader({
-      rpcUrl: env.NEXT_PUBLIC_SOLANA_RPC,
+      rpcUrl: env.OUTCRY_BASE_RPC,
       programId: env.OUTCRY_PROGRAM_ID,
     });
     this.setState(new WorldState());
     this.initializePitState();
     this.onMessage("input", (client, payload) => this.enqueueInput(client, payload));
-    this.onMessage("interact", (client, payload) => this.interact(client, payload));
+    this.onMessage("interact", (client, payload) => void this.interact(client, payload));
     this.onMessage("beginConfirm", (client) => this.beginConfirmation(client));
     this.onMessage("confirmSeat", (client, payload) => void this.confirmSeat(client, payload));
     this.onMessage("reconcileSeat", (client, payload) => void this.reconcileSeat(client, payload));
@@ -167,11 +167,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  private interact(client: Client, payload: unknown) {
+  private async interact(client: Client, payload: unknown) {
     const request = parseSeatRequest(payload);
     const player = this.state.players.get(client.sessionId);
     if (!request || !player || player.mode !== "WALKING") {
       this.sendSeatResult(client, { accepted: false, reason: "player_not_walking" });
+      return;
+    }
+    if (request.pitId === "wall-street-01" && !this.activeMatchAddress) {
+      this.sendSeatResult(client, { accepted: false, reason: "chain_match_unavailable" });
       return;
     }
     const result = this.seating.reserve(
@@ -232,7 +236,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private async reconcileSeat(client: Client, payload: unknown) {
     const identity = parseSeatReconciliation(payload);
     const player = this.state.players.get(client.sessionId);
-    if (!identity || !player || player.mode !== "WALKING") {
+    const currentSeat = this.seating.getForSession(client.sessionId);
+    const canRebindReservedSeat = Boolean(currentSeat && currentSeat.status === "RESERVED" && player?.mode === "SEATED");
+    if (!identity || !player || (player.mode !== "WALKING" && !canRebindReservedSeat)) {
       this.sendSeatResult(client, { accepted: false, reason: "invalid_reconciliation" });
       return;
     }
@@ -245,6 +251,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.sendSeatResult(client, { accepted: false, reason: "chain_reconciliation_unavailable" });
       return;
     }
+    if (canRebindReservedSeat && currentSeat) {
+      const releasedSeats = this.seating.releaseSession(client.sessionId);
+      for (const released of releasedSeats) this.syncSeat(this.seating.get(released.pitId, released.seatIndex));
+      this.clearSeatPlayer(player, currentSeat, client.sessionId);
+    }
 
     const seatIndex = (await Promise.all(
       Array.from({ length: pit.capacity }, (_, index) => this.membershipReader!.isConfirmed({
@@ -253,10 +264,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         seatIndex: index,
       }).then((confirmed) => confirmed ? index : undefined)),
     )).find((index): index is number => index !== undefined);
-    if (seatIndex === undefined) {
-      this.sendSeatResult(client, { accepted: false, reason: "chain_membership_not_found" });
-      return;
-    }
+    // Reconciliation is best-effort on world entry. A wallet that has not
+    // joined this Match yet has no seat to restore; it can still walk to a
+    // free seat and use the explicit wallet-join flow.
+    if (seatIndex === undefined) return;
 
     const result = this.seating.restoreConfirmed(client.sessionId, pit.pitId, seatIndex);
     if (result.accepted) this.seatPlayer(client.sessionId, player, result.seat);

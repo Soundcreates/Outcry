@@ -17,9 +17,24 @@ const initialWorlds: WorldCard[] = [
 const worldHttp = import.meta.env.VITE_WORLD_HTTP ||
   (import.meta.env.VITE_WORLD_WS || "ws://localhost:2567").replace(/^ws/, "http");
 
+function worldFromUrl() {
+  const id = new URLSearchParams(window.location.search).get("world");
+  return initialWorlds.some((world) => world.ready && world.id === id) ? id : null;
+}
+
 export default function App() {
-  const [worldId, setWorldId] = useState<string | null>(null);
+  const [worldId, setWorldId] = useState<string | null>(worldFromUrl);
   const [worlds, setWorlds] = useState(initialWorlds);
+
+  const enterWorld = (id: string) => {
+    window.history.replaceState(null, "", `?world=${encodeURIComponent(id)}`);
+    setWorldId(id);
+  };
+
+  const exitWorld = () => {
+    window.history.replaceState(null, "", window.location.pathname);
+    setWorldId(null);
+  };
 
   useEffect(() => {
     let active = true;
@@ -48,7 +63,7 @@ export default function App() {
   }, []);
 
   if (worldId) {
-    return <WorldCanvas worldId={worldId} onExit={() => setWorldId(null)} />;
+    return <WorldCanvas worldId={worldId} onExit={exitWorld} />;
   }
 
   return (
@@ -64,7 +79,7 @@ export default function App() {
             className="world-card"
             disabled={!world.ready}
             key={world.id}
-            onClick={() => setWorldId(world.id)}
+            onClick={() => enterWorld(world.id)}
             type="button"
           >
             <span>{world.name}</span>

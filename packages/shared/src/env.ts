@@ -11,7 +11,7 @@ const optionalString = z.preprocess(
 
 const publicEnvSchema = z.object({
   NEXT_PUBLIC_WORLD_WS: z.string().url().default("ws://localhost:2567"),
-  NEXT_PUBLIC_SOLANA_RPC: z.string().url().default("https://api.devnet.solana.com"),
+  OUTCRY_BASE_RPC: z.string().url().default("https://api.devnet.solana.com"),
   NEXT_PUBLIC_MAGICBLOCK_TEE_RPC: z
     .string()
     .url()

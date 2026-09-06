@@ -9,7 +9,7 @@ const verifier = new TokenVerifier(apiKey, apiSecret);
 
 const parsedEnv = readServerEnv({
   NEXT_PUBLIC_WORLD_WS: "ws://localhost:2567",
-  NEXT_PUBLIC_SOLANA_RPC: "https://api.devnet.solana.com",
+  OUTCRY_BASE_RPC: "https://api.devnet.solana.com",
   NEXT_PUBLIC_MAGICBLOCK_TEE_RPC: "https://devnet-tee.magicblock.app",
   LIVEKIT_URL: "wss://phase4.example",
   LIVEKIT_API_KEY: apiKey,

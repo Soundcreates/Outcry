@@ -10,6 +10,7 @@ const requiredFiles = [
   "apps/web/index.html",
   "apps/web/src/main.tsx",
   "apps/web/src/App.tsx",
+  "apps/web/src/chain/idl/outcry.json",
   "apps/web/vite.config.ts",
   "apps/world-server/package.json",
   "apps/world-server/src/index.ts",
@@ -48,6 +49,8 @@ for (const boundary of ["Colyseus", "LiveKit", "STT", "MagicBlock PER", "Solana 
 }
 
 const webPackage = JSON.parse(await readFile("apps/web/package.json", "utf8"));
+const rootPackage = JSON.parse(await readFile("package.json", "utf8"));
+assert.match(rootPackage.scripts["deploy:program"], /^pnpm build:program && anchor program deploy/);
 assert.equal(webPackage.scripts.dev, "vite", "web must use Vite dev server");
 assert.equal(webPackage.scripts.build, "vite build", "web must use Vite build");
 assert.equal(webPackage.dependencies.next, undefined, "Next.js must not be a web dependency");

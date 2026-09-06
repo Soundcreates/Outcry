@@ -138,12 +138,12 @@ function readMatchAccount(account) {
   assert.ok(account, "match account missing");
   assert.equal(account.owner.toBase58(), programId.toBase58());
   const data = account.data;
-  assert.equal(data.length, 372);
+  assert.equal(data.length, 373);
   return {
     status: data.readUInt8(80),
     capacity: data.readUInt8(81),
     playerCount: data.readUInt8(82),
-    players: Array.from({ length: 4 }, (_, index) => new PublicKey(data.subarray(83 + index * 32, 115 + index * 32))),
+    players: Array.from({ length: 4 }, (_, index) => new PublicKey(data.subarray(84 + index * 32, 116 + index * 32))),
   };
 }
 
@@ -170,7 +170,7 @@ const connection = new Connection(rpcUrl, "confirmed");
 let worldRoom;
 let restartedWorldRoom;
 const previousChainEnv = {
-  NEXT_PUBLIC_SOLANA_RPC: process.env.NEXT_PUBLIC_SOLANA_RPC,
+  OUTCRY_BASE_RPC: process.env.OUTCRY_BASE_RPC,
   OUTCRY_PROGRAM_ID: process.env.OUTCRY_PROGRAM_ID,
   OUTCRY_MATCH_ADDRESS: process.env.OUTCRY_MATCH_ADDRESS,
 };
@@ -210,7 +210,7 @@ try {
     seatIndex: 0,
   }), true);
 
-  process.env.NEXT_PUBLIC_SOLANA_RPC = rpcUrl;
+  process.env.OUTCRY_BASE_RPC = rpcUrl;
   process.env.OUTCRY_PROGRAM_ID = programId.toBase58();
   process.env.OUTCRY_MATCH_ADDRESS = matchState.toBase58();
   worldRoom = new WorldRoom();
@@ -313,8 +313,8 @@ try {
 } finally {
   if (worldRoom) worldRoom.setSimulationInterval();
   if (restartedWorldRoom) restartedWorldRoom.setSimulationInterval();
-  if (previousChainEnv.NEXT_PUBLIC_SOLANA_RPC === undefined) delete process.env.NEXT_PUBLIC_SOLANA_RPC;
-  else process.env.NEXT_PUBLIC_SOLANA_RPC = previousChainEnv.NEXT_PUBLIC_SOLANA_RPC;
+  if (previousChainEnv.OUTCRY_BASE_RPC === undefined) delete process.env.OUTCRY_BASE_RPC;
+  else process.env.OUTCRY_BASE_RPC = previousChainEnv.OUTCRY_BASE_RPC;
   if (previousChainEnv.OUTCRY_PROGRAM_ID === undefined) delete process.env.OUTCRY_PROGRAM_ID;
   else process.env.OUTCRY_PROGRAM_ID = previousChainEnv.OUTCRY_PROGRAM_ID;
   if (previousChainEnv.OUTCRY_MATCH_ADDRESS === undefined) delete process.env.OUTCRY_MATCH_ADDRESS;

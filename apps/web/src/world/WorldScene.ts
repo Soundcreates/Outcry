@@ -207,7 +207,7 @@ export class WorldScene extends Phaser.Scene {
     const up = this.cursors.up.isDown || this.wasd.W.isDown;
     const down = this.cursors.down.isDown || this.wasd.S.isDown;
     const velocity = new Phaser.Math.Vector2(Number(right) - Number(left), Number(down) - Number(up));
-    if (this.room && canMove) {
+    if (this.room && canMove && this.room.connection.isOpen) {
       this.room.send("input", {
         seq: this.inputSequence++,
         left,
@@ -349,9 +349,12 @@ export class WorldScene extends Phaser.Scene {
       this.seatOverlayOpen = false;
       this.callbacks.onSeatExit?.();
     }
+    const reason = value.reason === "chain_match_unavailable"
+      ? "Match unavailable · onchain setup required"
+      : value.reason ?? "request rejected";
     this.interactionFeedback = value.accepted
       ? value.action === "released" ? "Seat released" : `Seat ${value.action ?? "updated"}`
-      : `Seat unavailable · ${value.reason ?? "request rejected"}`;
+      : `Seat unavailable · ${reason}`;
     this.feedbackUntil = this.time.now + 1800;
   }
 

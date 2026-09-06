@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { Keypair } from "@solana/web3.js";
 import {
   assertPrivateReadAccess,
@@ -8,7 +9,9 @@ import {
   privateInventoryPda,
   privatePermissionPda,
   privateQuotePda,
+  readOwnPrivateInventory,
 } from "./privacy";
+import outcryIdl from "./idl/outcry.json";
 
 const match = Keypair.generate().publicKey;
 const program = Keypair.generate().publicKey;
@@ -71,6 +74,9 @@ for (let iteration = 0; iteration < 100; iteration += 1) {
 assert.equal(canReadPrivateAccount(aliceQuote, PRIVATE_EXECUTOR), true);
 assertPrivateReadAccess(aliceQuote, alice);
 assert.throws(() => assertPrivateReadAccess(aliceQuote, bob), /private_account_access_denied/);
+assert.throws(() => assertPrivateReadAccess(bobQuote, alice), /private_account_access_denied/);
+assert.throws(() => assertPrivateReadAccess(aliceInventory, bob), /private_account_access_denied/);
+assert.throws(() => assertPrivateReadAccess(aliceQuote, spectator), /private_account_access_denied/);
 
 let authCalls = 0;
 const session = await createPrivateConnection({
@@ -104,4 +110,35 @@ await assert.rejects(
 );
 assert.equal(failedAuthCalls, 0);
 
-console.log("privacy boundary: 800 access assertions, PDA separation, TEE fail-closed, and auth session pass");
+const inventoryData = new Uint8Array(129);
+inventoryData.set(outcryIdl.accounts.find((account) => account.name === "PrivateInventory")?.discriminator ?? [], 0);
+inventoryData.set(match.toBytes(), 8);
+inventoryData.set(alice.toBytes(), 40);
+new DataView(inventoryData.buffer).setBigInt64(72, -2n, true);
+new DataView(inventoryData.buffer).setBigUint64(80, 1234n, true);
+new DataView(inventoryData.buffer).setBigUint64(88, 0n, true);
+new DataView(inventoryData.buffer).setBigUint64(96, 1n, true);
+new DataView(inventoryData.buffer).setBigUint64(112, 99n, true);
+const privateConnection = {
+  getAccountInfo: async () => ({ owner: program, data: inventoryData }),
+} as never;
+const decodedInventory = await readOwnPrivateInventory({ connection: privateConnection, matchAddress: match, player: alice, programId: program });
+assert.equal(decodedInventory.solPositionLots, -2n);
+assert.equal(decodedInventory.cashE6, 1234n);
+assert.equal(decodedInventory.filledNotionalE6, 99n);
+const publicFallbackConnection = {
+  getAccountInfo: async () => ({ owner: spectator, data: inventoryData }),
+} as never;
+await assert.rejects(
+  readOwnPrivateInventory({ connection: publicFallbackConnection, matchAddress: match, player: alice, programId: program }),
+  /private_inventory_account_invalid/,
+);
+const privateQuotePanelSource = await readFile(new URL("../match/PrivateQuotePanel.tsx", import.meta.url), "utf8");
+assert.match(privateQuotePanelSource, /Only your quote is sent through the TEE/);
+assert.match(privateQuotePanelSource, /private_quote_failed/);
+assert.match(privateQuotePanelSource, /Submit private quote/);
+assert.match(privateQuotePanelSource, /setStatus\("error"\)/);
+assert.match(privateQuotePanelSource, /onClick=\{\(\) => void submit\(\)\}/);
+assert.doesNotMatch(privateQuotePanelSource, /new Connection|VITE_SOLANA_RPC|NEXT_PUBLIC_SOLANA_RPC/);
+
+console.log("privacy boundary: 800 matrix assertions + Alice/Bob/spectator attack denials + TEE fail-closed/retry boundary pass");

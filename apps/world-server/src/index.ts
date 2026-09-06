@@ -68,5 +68,5 @@ gameServer.define("world", WorldRoom);
 
 gameServer.listen(port).then(() => {
   console.log(`OUTCRY world server listening on http://localhost:${port}`);
-  console.log(`Solana RPC configured: ${env.NEXT_PUBLIC_SOLANA_RPC}`);
+  console.log(`Base Solana RPC configured: ${env.OUTCRY_BASE_RPC}`);
 });

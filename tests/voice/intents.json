@@ -1,0 +1,28 @@
+{
+  "valid": [
+    "buy one sol", "buy 1 sol", "buy two sol", "buy 2 sol", "buy five sol", "buy 5 sol",
+    "take one SOL", "take 1 SOL", "take two SOL", "take 2 SOL", "take five SOL", "take 5 SOL",
+    "sell one sol", "sell 1 sol", "sell two sol", "sell 2 sol", "sell five sol", "sell 5 sol",
+    "offer one SOL", "offer 1 SOL", "offer two SOL", "offer 2 SOL", "offer five SOL", "offer 5 SOL",
+    "please buy one sol", "please buy two sol", "please buy five sol", "I want to buy 1 SOL",
+    "I want to buy 2 SOL", "I want to buy 5 SOL", "I would like to take one SOL",
+    "I would like to take two SOL", "I would like to take five SOL", "can you buy 1 sol",
+    "can you buy 2 sol", "can you buy 5 sol", "please sell one sol", "please sell two sol",
+    "please sell five sol", "I want to sell 1 SOL", "I want to sell 2 SOL", "I want to sell 5 SOL",
+    "I would like to offer one SOL", "I would like to offer two SOL", "I would like to offer five SOL",
+    "take 1 sol please", "take 2 sol please", "take 5 sol please", "buy two sol now", "sell five sol now"
+  ],
+  "invalid": [
+    "buy twenty sol", "buy three sol", "buy four sol", "buy ten sol", "buy zero sol",
+    "sell twenty sol", "sell three sol", "sell four sol", "sell ten sol", "sell zero sol",
+    "buy 3 sol", "buy 4 sol", "buy 10 sol", "sell 3 sol", "sell 4 sol", "sell 10 sol",
+    "buy two eth", "sell two eth", "buy two btc", "sell two bitcoin", "buy two usdc",
+    "buy two sol and sell one sol", "sell one sol then buy two sol", "buy one and two sol",
+    "buy 1 2 sol", "buy one two sol", "buy two sol two", "sell five 2 sol", "take one offer two sol",
+    "buy sol", "sell sol", "take sol", "offer sol", "buy two", "sell two",
+    "I want a sandwich", "hello trading floor", "please quote the market", "what is the price",
+    "someone buy two sol", "someone sell two sol", "background buy two sol", "ignore buy two sol",
+    "buy two SOL and ETH", "sell five BTC", "take twenty SOL", "offer three SOL",
+    "buy 6 SOL", "sell 0 SOL", "take 1.5 SOL", "buy one hundred SOL", "offer ten SOL"
+  ]
+}
