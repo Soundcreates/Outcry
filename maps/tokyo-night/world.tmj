@@ -1,0 +1,239 @@
+{
+  "compressionlevel": -1,
+  "height": 15,
+  "infinite": false,
+  "layers": [
+    { "id": 1, "name": "ground", "type": "objectgroup", "objects": [] },
+    { "id": 2, "name": "floor_decor", "type": "objectgroup", "objects": [] },
+    { "id": 3, "name": "furniture", "type": "objectgroup", "objects": [] },
+    {
+      "id": 4,
+      "name": "collision",
+      "type": "objectgroup",
+      "objects": [
+        { "id": 1, "name": "north_roofline", "type": "Collision", "x": 0, "y": 0, "width": 640, "height": 96 },
+        { "id": 2, "name": "south_roofline", "type": "Collision", "x": 0, "y": 448, "width": 640, "height": 32 },
+        { "id": 3, "name": "west_roofline", "type": "Collision", "x": 0, "y": 0, "width": 32, "height": 480 },
+        { "id": 4, "name": "east_roofline", "type": "Collision", "x": 608, "y": 0, "width": 32, "height": 480 },
+        { "id": 5, "name": "west_shop", "type": "Collision", "x": 32, "y": 96, "width": 64, "height": 64 },
+        { "id": 6, "name": "east_shop", "type": "Collision", "x": 544, "y": 96, "width": 64, "height": 64 },
+        { "id": 7, "name": "north_grate", "type": "Collision", "x": 304, "y": 144, "width": 32, "height": 32 },
+        { "id": 8, "name": "south_grate", "type": "Collision", "x": 304, "y": 320, "width": 32, "height": 32 },
+        { "id": 9, "name": "west_loading_bay", "type": "Collision", "x": 32, "y": 384, "width": 96, "height": 64 },
+        { "id": 10, "name": "east_loading_bay", "type": "Collision", "x": 512, "y": 384, "width": 96, "height": 64 }
+      ]
+    },
+    { "id": 5, "name": "above_player", "type": "objectgroup", "objects": [] },
+    {
+      "id": 6,
+      "name": "objects_spawn",
+      "type": "objectgroup",
+      "objects": [
+        {
+          "id": 11,
+          "name": "tokyo_spawn",
+          "type": "Spawn",
+          "class": "Spawn",
+          "x": 320,
+          "y": 416,
+          "width": 0,
+          "height": 0,
+          "properties": [{ "name": "spawnId", "type": "string", "value": "main" }]
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "objects_pits",
+      "type": "objectgroup",
+      "objects": [
+        {
+          "id": 12,
+          "name": "pit_tokyo_night_01",
+          "type": "Pit",
+          "class": "Pit",
+          "x": 88,
+          "y": 176,
+          "width": 176,
+          "height": 128,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-01" },
+            { "name": "capacity", "type": "int", "value": 4 },
+            { "name": "interactionRadius", "type": "int", "value": 48 },
+            { "name": "minPlayers", "type": "int", "value": 1 }
+          ]
+        },
+        {
+          "id": 13,
+          "name": "pit_tokyo_night_02",
+          "type": "Pit",
+          "class": "Pit",
+          "x": 376,
+          "y": 176,
+          "width": 176,
+          "height": 128,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-02" },
+            { "name": "capacity", "type": "int", "value": 4 },
+            { "name": "interactionRadius", "type": "int", "value": 48 },
+            { "name": "minPlayers", "type": "int", "value": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "objects_seats",
+      "type": "objectgroup",
+      "objects": [
+        {
+          "id": 14,
+          "name": "pit_01_seat_0",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 128,
+          "y": 152,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-01" },
+            { "name": "seatIndex", "type": "int", "value": 0 },
+            { "name": "facing", "type": "string", "value": "south" }
+          ]
+        },
+        {
+          "id": 15,
+          "name": "pit_01_seat_1",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 224,
+          "y": 152,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-01" },
+            { "name": "seatIndex", "type": "int", "value": 1 },
+            { "name": "facing", "type": "string", "value": "south" }
+          ]
+        },
+        {
+          "id": 16,
+          "name": "pit_01_seat_2",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 128,
+          "y": 328,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-01" },
+            { "name": "seatIndex", "type": "int", "value": 2 },
+            { "name": "facing", "type": "string", "value": "north" }
+          ]
+        },
+        {
+          "id": 17,
+          "name": "pit_01_seat_3",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 224,
+          "y": 328,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-01" },
+            { "name": "seatIndex", "type": "int", "value": 3 },
+            { "name": "facing", "type": "string", "value": "north" }
+          ]
+        },
+        {
+          "id": 18,
+          "name": "pit_02_seat_0",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 416,
+          "y": 152,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-02" },
+            { "name": "seatIndex", "type": "int", "value": 0 },
+            { "name": "facing", "type": "string", "value": "south" }
+          ]
+        },
+        {
+          "id": 19,
+          "name": "pit_02_seat_1",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 512,
+          "y": 152,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-02" },
+            { "name": "seatIndex", "type": "int", "value": 1 },
+            { "name": "facing", "type": "string", "value": "south" }
+          ]
+        },
+        {
+          "id": 20,
+          "name": "pit_02_seat_2",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 416,
+          "y": 328,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-02" },
+            { "name": "seatIndex", "type": "int", "value": 2 },
+            { "name": "facing", "type": "string", "value": "north" }
+          ]
+        },
+        {
+          "id": 21,
+          "name": "pit_02_seat_3",
+          "type": "PitSeat",
+          "class": "PitSeat",
+          "x": 512,
+          "y": 328,
+          "width": 0,
+          "height": 0,
+          "properties": [
+            { "name": "pitId", "type": "string", "value": "tokyo-night-02" },
+            { "name": "seatIndex", "type": "int", "value": 3 },
+            { "name": "facing", "type": "string", "value": "north" }
+          ]
+        }
+      ]
+    },
+    { "id": 9, "name": "objects_portals", "type": "objectgroup", "objects": [] },
+    { "id": 10, "name": "objects_decor", "type": "objectgroup", "objects": [] }
+  ],
+  "nextlayerid": 11,
+  "nextobjectid": 22,
+  "orientation": "orthogonal",
+  "renderorder": "right-down",
+  "tileheight": 32,
+  "tilesets": [
+    {
+      "columns": 1,
+      "firstgid": 1,
+      "image": "assets/background.png",
+      "imageheight": 32,
+      "imagewidth": 32,
+      "margin": 0,
+      "name": "tokyo-night-metadata",
+      "spacing": 0,
+      "tilecount": 1,
+      "tileheight": 32,
+      "tilewidth": 32
+    }
+  ],
+  "tilewidth": 32,
+  "type": "map",
+  "version": "1.10",
+  "tiledversion": "1.10.2",
+  "width": 20
+}

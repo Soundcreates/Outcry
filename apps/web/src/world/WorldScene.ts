@@ -1,16 +1,16 @@
 import Phaser from "phaser";
 import type { PlayerState, WorldState } from "@outcry/shared/world-state";
 import type { WorldRoom } from "./createWorldGame";
-import avatar01 from "../../../../avatar_images/avatar_01.png";
-import avatar02 from "../../../../avatar_images/avatar_02.png";
-import avatar03 from "../../../../avatar_images/avatar_03.png";
-import avatar04 from "../../../../avatar_images/avatar_04.png";
-import avatar05 from "../../../../avatar_images/avatar_05.png";
-import avatar06 from "../../../../avatar_images/avatar_06.png";
-import avatar07 from "../../../../avatar_images/avatar_07.png";
-import avatar08 from "../../../../avatar_images/avatar_08.png";
-import avatar09 from "../../../../avatar_images/avatar_09.png";
-import avatar10 from "../../../../avatar_images/avatar_10.png";
+import avatar01 from "../../../../avatar_images/avatar_01_walk.png";
+import avatar02 from "../../../../avatar_images/avatar_02_walk.png";
+import avatar03 from "../../../../avatar_images/avatar_03_walk.png";
+import avatar04 from "../../../../avatar_images/avatar_04_walk.png";
+import avatar05 from "../../../../avatar_images/avatar_05_walk.png";
+import avatar06 from "../../../../avatar_images/avatar_06_walk.png";
+import avatar07 from "../../../../avatar_images/avatar_07_walk.png";
+import avatar08 from "../../../../avatar_images/avatar_08_walk.png";
+import avatar09 from "../../../../avatar_images/avatar_09_walk.png";
+import avatar10 from "../../../../avatar_images/avatar_10_walk.png";
 
 const PLAYER_SPEED = 150;
 const DECOR_COLLISIONS = {
@@ -34,10 +34,12 @@ const AVATAR_IMAGES = [
   avatar10,
 ] as const;
 
+type Direction = "down" | "left" | "right" | "up";
 type RemotePlayer = {
   sprite: Phaser.GameObjects.Sprite;
   targetX: number;
   targetY: number;
+  avatarIndex: number;
 };
 
 type InteractiveSeat = {
@@ -45,6 +47,7 @@ type InteractiveSeat = {
   seatIndex: number;
   x: number;
   y: number;
+  facing: string;
   interactionRadius: number;
 };
 
@@ -57,6 +60,7 @@ export class WorldScene extends Phaser.Scene {
   private readonly worldId: string;
   private readonly room?: WorldRoom;
   private readonly callbacks: WorldSceneCallbacks;
+  private readonly mapSlug: string;
   private player?: Phaser.Physics.Arcade.Sprite;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd?: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
@@ -69,31 +73,46 @@ export class WorldScene extends Phaser.Scene {
   private readonly remotePlayers = new Map<string, RemotePlayer>();
   private interactiveSeats: InteractiveSeat[] = [];
   private seatOverlayOpen = false;
-  private readonly mapSlug = "wall-street";
+  private playerAvatarIndex = 0;
 
   constructor(worldId: string, room?: WorldRoom, callbacks: WorldSceneCallbacks = {}) {
     super({ key: "WorldScene" });
     this.worldId = worldId;
+    this.mapSlug = worldId;
     this.room = room;
     this.callbacks = callbacks;
   }
 
   preload() {
     this.load.tilemapTiledJSON("world", `/${this.mapSlug}/world.tmj`);
-    this.load.image("outcry-floor", `/${this.mapSlug}/assets/floor.svg`);
-    for (const asset of ["tree", "bench", "bin", "dust", "planter", "lamp"]) {
-      this.load.image(asset, `/${this.mapSlug}/assets/${asset}.svg`);
+    if (this.mapSlug === "tokyo-night") {
+      this.load.image("world-background", `/${this.mapSlug}/assets/background.png`);
+    } else {
+      this.load.image("outcry-floor", `/${this.mapSlug}/assets/floor.svg`);
+      for (const asset of ["tree", "bench", "bin", "dust", "planter", "lamp"]) {
+        this.load.image(asset, `/${this.mapSlug}/assets/${asset}.svg`);
+      }
     }
-    AVATAR_IMAGES.forEach((image, index) => this.load.image(`avatar-${index}`, image));
+    AVATAR_IMAGES.forEach((image, index) => {
+      this.load.spritesheet(`avatar-${index}`, image, { frameWidth: 32, frameHeight: 48 });
+    });
   }
 
   create() {
     const map = this.make.tilemap({ key: "world" });
-    const tileset = map.addTilesetImage("outcry-floor", "outcry-floor");
-    if (!tileset) throw new Error("Unable to load OUTCRY tileset");
+    if (this.mapSlug === "tokyo-night") {
+      this.add
+        .image(map.widthInPixels / 2, map.heightInPixels / 2, "world-background")
+        .setOrigin(0.5)
+        .setDisplaySize(map.widthInPixels, map.heightInPixels)
+        .setDepth(-100);
+    } else {
+      const tileset = map.addTilesetImage("outcry-floor", "outcry-floor");
+      if (!tileset) throw new Error("Unable to load OUTCRY tileset");
 
-    for (const layerName of ["ground", "floor_decor", "furniture"]) {
-      map.createLayer(layerName, tileset, 0, 0);
+      for (const layerName of ["ground", "floor_decor", "furniture"]) {
+        map.createLayer(layerName, tileset, 0, 0);
+      }
     }
 
     const decor = map.getObjectLayer("objects_decor")?.objects ?? [];
@@ -113,6 +132,7 @@ export class WorldScene extends Phaser.Scene {
         seatIndex,
         x: seat.x ?? 0,
         y: seat.y ?? 0,
+        facing: String(this.propertyValue(seat, "facing") ?? "south"),
         interactionRadius: Number(this.propertyValue(pit, "interactionRadius") ?? 48),
       }];
     });
@@ -170,10 +190,11 @@ export class WorldScene extends Phaser.Scene {
     const spawn = map.getObjectLayer("objects_spawn")?.objects[0];
     if (!spawn) throw new Error("Map has no spawn point");
 
+    this.playerAvatarIndex = this.avatarIndexForSession(this.room?.sessionId ?? "preview");
     this.player = this.physics.add.sprite(
       spawn.x ?? 0,
       spawn.y ?? 0,
-      this.avatarTexture(this.room?.sessionId ?? "preview"),
+      `avatar-${this.playerAvatarIndex}`,
     );
     this.player.setBodySize(18, 24, true);
     this.player.setCollideWorldBounds(true);
@@ -181,12 +202,16 @@ export class WorldScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
     this.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    this.createAnimations();
     if (this.room) {
       this.room.onStateChange((state) => this.syncServerState(state));
       this.room.onMessage("seat", (result) => this.handleSeatResult(result));
       this.syncServerState(this.room.state);
     }
-    map.createLayer("above_player", tileset, 0, 0);
+    if (this.mapSlug !== "tokyo-night") {
+      const tileset = map.addTilesetImage("outcry-floor", "outcry-floor");
+      if (tileset) map.createLayer("above_player", tileset, 0, 0);
+    }
     this.cursors = this.input.keyboard?.createCursorKeys();
     this.wasd = this.input.keyboard?.addKeys("W,A,S,D") as typeof this.wasd;
     this.interactKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.E);
@@ -239,18 +264,21 @@ export class WorldScene extends Phaser.Scene {
 
     if (!canMove) {
       this.player.setVelocity(0, 0);
+      this.player.anims.stop();
       this.updateRemotePlayers();
       return;
     }
 
     if (velocity.lengthSq() === 0) {
       this.player.setVelocity(0, 0);
+      this.player.anims.stop();
       this.updateRemotePlayers();
       return;
     }
 
     velocity.normalize().scale(PLAYER_SPEED);
     this.player.setVelocity(velocity.x, velocity.y);
+    this.player.anims.play(this.animationKey(this.playerAvatarIndex, this.direction(velocity.x, velocity.y)), true);
     this.updateRemotePlayers();
   }
 
@@ -276,14 +304,18 @@ export class WorldScene extends Phaser.Scene {
         remote.targetX = player.x;
         remote.targetY = player.y;
         remote.sprite.setAlpha(player.mode === "RECONNECTING" ? 0.45 : 1);
+        this.updateAnimation(remote.sprite, remote.avatarIndex, player.facing, player.mode === "WALKING");
         return;
       }
 
+      const avatarIndex = this.avatarIndexForSession(sessionId);
       this.remotePlayers.set(sessionId, {
-        sprite: this.add.sprite(player.x, player.y, this.avatarTexture(sessionId)).setDepth(player.y),
+        sprite: this.add.sprite(player.x, player.y, `avatar-${avatarIndex}`).setDepth(player.y),
         targetX: player.x,
         targetY: player.y,
+        avatarIndex,
       });
+      this.updateAnimation(this.remotePlayers.get(sessionId)!.sprite, avatarIndex, player.facing, player.mode === "WALKING");
     });
 
     for (const [sessionId, remote] of this.remotePlayers) {
@@ -388,10 +420,54 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private avatarTexture(sessionId: string) {
+  private avatarIndexForSession(sessionId: string) {
     let hash = 0;
     for (const character of sessionId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-    return `avatar-${hash % AVATAR_IMAGES.length}`;
+    return hash % AVATAR_IMAGES.length;
+  }
+
+  private direction(x: number, y: number): Direction {
+    if (Math.abs(x) > Math.abs(y)) return x < 0 ? "left" : "right";
+    return y < 0 ? "up" : "down";
+  }
+
+  private animationKey(avatarIndex: number, direction: Direction) {
+    return `avatar-${avatarIndex}-walk-${direction}`;
+  }
+
+  private updateAnimation(
+    sprite: Phaser.GameObjects.Sprite,
+    avatarIndex: number,
+    facing: string,
+    walking: boolean,
+  ) {
+    if (!walking) {
+      sprite.anims.stop();
+      return;
+    }
+    const direction = ["down", "left", "right", "up"].includes(facing as Direction)
+      ? facing as Direction
+      : "down";
+    sprite.anims.play(this.animationKey(avatarIndex, direction), true);
+  }
+
+  private createAnimations() {
+    const ranges: Record<Direction, [number, number]> = {
+      down: [0, 3],
+      left: [4, 7],
+      right: [8, 11],
+      up: [12, 15],
+    };
+    for (let avatarIndex = 0; avatarIndex < AVATAR_IMAGES.length; avatarIndex += 1) {
+      for (const [direction, [start, end]] of Object.entries(ranges) as [Direction, [number, number]][]) {
+        this.anims.create({
+          key: this.animationKey(avatarIndex, direction),
+          frames: this.anims.generateFrameNumbers(`avatar-${avatarIndex}`, { start, end }),
+          frameRate: 8,
+          repeat: -1,
+        });
+      }
+    }
   }
 
   private renderDecor(objects: Phaser.Types.Tilemaps.TiledObject[]) {
@@ -437,7 +513,20 @@ export class WorldScene extends Phaser.Scene {
     }
 
     for (const seat of seats) {
-      this.add.circle(seat.x ?? 0, seat.y ?? 0, 5, 0xffb347, 0.9).setDepth(3);
+      const x = seat.x ?? 0;
+      const y = seat.y ?? 0;
+      const facing = String(this.propertyValue(seat, "facing") ?? "south").toLowerCase();
+      const horizontal = facing === "east" || facing === "west";
+      const backrestOffset = facing === "south" ? -5 : facing === "north" ? 5 : 0;
+      const sideOffset = facing === "east" ? -5 : facing === "west" ? 5 : 0;
+      this.add
+        .rectangle(x + sideOffset, y + backrestOffset, horizontal ? 4 : 16, horizontal ? 16 : 4, 0x162236, 0.95)
+        .setStrokeStyle(1, 0x6df7e8, 0.9)
+        .setDepth(3);
+      this.add
+        .rectangle(x, y, horizontal ? 8 : 16, horizontal ? 16 : 8, 0x312245, 0.95)
+        .setStrokeStyle(1, 0xff4fc3, 0.85)
+        .setDepth(3);
     }
   }
 }

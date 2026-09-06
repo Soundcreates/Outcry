@@ -169,6 +169,11 @@ body {
   gap: 1rem;
 }
 
+.pit-voice-note {
+  color: #a9b3c6;
+  font: 0.75rem monospace;
+}
+
 .pit-header h2 {
   margin: 0.25rem 0 0;
   font-family: monospace;

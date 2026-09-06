@@ -11,7 +11,7 @@ type WorldCard = {
 
 const initialWorlds: WorldCard[] = [
   { id: "wall-street", name: "Wall Street", online: 0, pits: 2, ready: true },
-  { id: "tokyo-night", name: "Tokyo Night", online: 0, pits: 0, ready: false },
+  { id: "tokyo-night", name: "Tokyo Night", online: 0, pits: 2, ready: true },
 ];
 
 const worldHttp = import.meta.env.VITE_WORLD_HTTP ||

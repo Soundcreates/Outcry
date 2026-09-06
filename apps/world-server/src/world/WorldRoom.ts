@@ -23,7 +23,13 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   // ponytail: process-local presence count; use shared storage when the server is horizontally scaled.
   private static readonly activeSessions = new Set<string>();
   private static readonly seatedSessions = new Map<string, { pitId: string; seatIndex: number }>();
-  private static readonly knownPitIds = new Set(["wall-street-01", "wall-street-02"]);
+  private static readonly knownWorldIds = new Set(["wall-street", "tokyo-night"]);
+  private static readonly knownPitIds = new Set([
+    "wall-street-01",
+    "wall-street-02",
+    "tokyo-night-01",
+    "tokyo-night-02",
+  ]);
   private geometry!: WorldGeometry;
   private seating!: SeatLeaseManager;
   private membershipReader?: MatchMembershipReader;
@@ -31,10 +37,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private readonly pendingInputs = new Map<string, MovementInput[]>();
 
   async onCreate(options: { worldId?: string } = {}) {
-    if (options.worldId && options.worldId !== "wall-street") {
+    const worldId = options.worldId ?? "wall-street";
+    if (!WorldRoom.knownWorldIds.has(worldId)) {
       throw new Error("unknown_world");
     }
-    this.geometry = await loadWorldGeometry();
+    this.geometry = await loadWorldGeometry(worldId);
     this.seating = new SeatLeaseManager(this.geometry.pits, this.geometry.seats);
     const env = readServerEnv();
     this.activeMatchAddress = env.OUTCRY_MATCH_ADDRESS ?? "";

@@ -11,7 +11,8 @@ type Recognition = {
   continuous: boolean;
   interimResults: boolean;
   lang: string;
-  onerror: (() => void) | null;
+  onerror: ((event?: { error?: string }) => void) | null;
+  onnomatch?: (() => void) | null;
   onresult: ((event: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
   onend: (() => void) | null;
   start: () => void;
@@ -39,6 +40,7 @@ export default function TradeIntentPanel({ active, onConfirm, onSubmit }: Props)
 
   const parse = (value: string) => {
     const parsed = parseTradeIntent(value);
+    setInput(value);
     setTranscript(value);
     setDraft(parsed);
     setConfirmed(false);
@@ -58,15 +60,26 @@ export default function TradeIntentPanel({ active, onConfirm, onSubmit }: Props)
     recognition.interimResults = false;
     recognition.lang = "en-US";
     recognition.onresult = (event) => parse(event.results[0]?.[0]?.transcript ?? "");
-    recognition.onerror = () => {
+    recognition.onnomatch = () => {
       setListening(false);
-      setError("Speech input failed; use typed fallback.");
+      setError("No trade phrase was recognized; say BUY or SELL plus 1, 2, or 5 SOL.");
+    };
+    recognition.onerror = (event) => {
+      setListening(false);
+      setError(event?.error === "not-allowed"
+        ? "Speech permission was denied; allow microphone access or use typed fallback."
+        : "Speech input failed; use typed fallback.");
     };
     recognition.onend = () => setListening(false);
     recognitionRef.current = recognition;
     setError("");
     setListening(true);
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      setListening(false);
+      setError("Could not start browser speech input; use typed fallback.");
+    }
   };
 
   const confirm = () => {
@@ -94,14 +107,14 @@ export default function TradeIntentPanel({ active, onConfirm, onSubmit }: Props)
       <div className="trade-intent-heading">
         <div>
           <p className="eyebrow">ROUND INTENT</p>
-          <strong>Say the trade. Confirm the draft.</strong>
+          <strong>Click Start voice command, then say “buy five SOL”.</strong>
         </div>
         <span className={listening ? "trade-listening" : "trade-ready"} role="status">
           {listening ? "Listening…" : "Ready"}
         </span>
       </div>
       <div className="trade-intent-actions">
-        <button disabled={listening} onClick={startListening} type="button">{listening ? "Listening…" : "Use voice"}</button>
+        <button disabled={listening} onClick={startListening} type="button">{listening ? "Listening…" : "Start voice command"}</button>
         <form onSubmit={(event) => { event.preventDefault(); parse(input); }}>
           <input aria-label="Typed trade intent" onChange={(event) => setInput(event.target.value)} placeholder="buy two SOL" value={input} />
           <button type="submit">Parse typed</button>
@@ -111,7 +124,7 @@ export default function TradeIntentPanel({ active, onConfirm, onSubmit }: Props)
       {error && <p className="trade-intent-error" role="alert">{error}</p>}
       {draft && (
         <div className="trade-confirmation">
-          <span>{draft.side} {draft.quantity} SOL / USDC</span>
+          <span>Confirm {draft.side === "BUY" ? "bid" : "ask"}: {draft.quantity} SOL / USDC?</span>
           {confirmed ? (
             <>
               <strong role="status">{submitted ? "RFQ opened" : "Draft confirmed"}</strong>

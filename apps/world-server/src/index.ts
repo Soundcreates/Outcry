@@ -26,7 +26,7 @@ const gameServer = new Server({
         response.status(200).json({
           worlds: [
             { id: "wall-street", name: "Wall Street", mapUrl: "/wall-street/world.tmj", online: WorldRoom.onlineCount(), activePits: 2 },
-            { id: "tokyo-night", name: "Tokyo Night", mapUrl: null, online: 0, activePits: 0 },
+            { id: "tokyo-night", name: "Tokyo Night", mapUrl: "/tokyo-night/world.tmj", online: 0, activePits: 2 },
           ],
         });
       },

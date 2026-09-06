@@ -321,6 +321,9 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
                   <button onClick={() => void toggleMicrophone()} type="button">
                     {room.localParticipant.isMicrophoneEnabled ? "Mute mic" : "Join audio"}
                   </button>
+                  <span className="pit-voice-note">
+                    Pit audio is separate from trade dictation. When it is your turn, use “Start voice command”.
+                  </span>
                 </>
               )}
               {(phase === "error" || phase === "disconnected") && (
