@@ -157,6 +157,7 @@ assert.equal(initializeInventoryPermission.keys[2].pubkey.equals(privatePermissi
 
 const privateQuotePanelSource = await readFile(new URL("../match/PrivateQuotePanel.tsx", import.meta.url), "utf8");
 const privateInventoryPanelSource = await readFile(new URL("../match/PrivateInventoryPanel.tsx", import.meta.url), "utf8");
+const privacySource = await readFile(new URL("./privacy.ts", import.meta.url), "utf8");
 assert.match(privateQuotePanelSource, /Only your quote is sent through the TEE/);
 assert.match(privateQuotePanelSource, /private_quote_failed/);
 assert.match(privateQuotePanelSource, /Submit private quote/);
@@ -165,5 +166,8 @@ assert.match(privateQuotePanelSource, /onClick=\{\(\) => void submit\(\)\}/);
 assert.doesNotMatch(privateQuotePanelSource, /new Connection|VITE_SOLANA_RPC|NEXT_PUBLIC_SOLANA_RPC/);
 assert.match(privateInventoryPanelSource, /unlockPrivateInventory/);
 assert.match(privateInventoryPanelSource, /VITE_SOLANA_BASE_RPC/);
+assert.match(privateInventoryPanelSource, /wallet\.signTransaction/);
+assert.match(privacySource, /ensureTeeFeePayer/);
+assert.match(privacySource, /feePayer: input\.feePayer/);
 
 console.log("privacy boundary: 800 matrix assertions + Alice/Bob/spectator attack denials + TEE fail-closed/retry boundary pass");

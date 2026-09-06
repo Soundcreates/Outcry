@@ -417,6 +417,72 @@
       "args": []
     },
     {
+      "name": "commit_rfq_state",
+      "discriminator": [
+        234,
+        88,
+        14,
+        210,
+        19,
+        134,
+        237,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "match_state",
+          "writable": true
+        },
+        {
+          "name": "round",
+          "writable": true
+        },
+        {
+          "name": "oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "oracle.feed_id",
+                "account": "OraclePrice"
+              }
+            ]
+          }
+        },
+        {
+          "name": "magic_fee_vault",
+          "writable": true
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "magic_context",
+          "writable": true,
+          "address": "MagicContext1111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "create_match",
       "discriminator": [
         107,
@@ -476,6 +542,408 @@
         {
           "name": "match_nonce",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "delegate_match",
+      "discriminator": [
+        30,
+        116,
+        9,
+        69,
+        147,
+        61,
+        133,
+        238
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "buffer_match_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                178,
+                197,
+                217,
+                160,
+                223,
+                227,
+                156,
+                212,
+                209,
+                108,
+                212,
+                253,
+                83,
+                10,
+                40,
+                86,
+                106,
+                238,
+                170,
+                74,
+                225,
+                14,
+                19,
+                101,
+                34,
+                150,
+                5,
+                241,
+                42,
+                122,
+                160,
+                119
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_match_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_match_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "match_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "pit"
+              },
+              {
+                "kind": "arg",
+                "path": "match_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator",
+          "optional": true
+        },
+        {
+          "name": "owner_program",
+          "address": "D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt"
+        },
+        {
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "pit",
+          "type": "pubkey"
+        },
+        {
+          "name": "match_nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "delegate_oracle",
+      "discriminator": [
+        192,
+        135,
+        82,
+        45,
+        58,
+        203,
+        33,
+        133
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "buffer_oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "oracle"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                178,
+                197,
+                217,
+                160,
+                223,
+                227,
+                156,
+                212,
+                209,
+                108,
+                212,
+                253,
+                83,
+                10,
+                40,
+                86,
+                106,
+                238,
+                170,
+                74,
+                225,
+                14,
+                19,
+                101,
+                34,
+                150,
+                5,
+                241,
+                42,
+                122,
+                160,
+                119
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "oracle"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "oracle"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "feed_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator",
+          "optional": true
+        },
+        {
+          "name": "owner_program",
+          "address": "D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt"
+        },
+        {
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "feed_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -866,6 +1334,186 @@
         {
           "name": "dealer",
           "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "delegate_round",
+      "discriminator": [
+        4,
+        60,
+        37,
+        224,
+        19,
+        130,
+        106,
+        111
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "buffer_round_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round_state"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                178,
+                197,
+                217,
+                160,
+                223,
+                227,
+                156,
+                212,
+                209,
+                108,
+                212,
+                253,
+                83,
+                10,
+                40,
+                86,
+                106,
+                238,
+                170,
+                74,
+                225,
+                14,
+                19,
+                101,
+                34,
+                150,
+                5,
+                241,
+                42,
+                122,
+                160,
+                119
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_round_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round_state"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_round_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "round_state"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "round_state",
+          "writable": true
+        },
+        {
+          "name": "validator",
+          "optional": true
+        },
+        {
+          "name": "owner_program",
+          "address": "D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt"
+        },
+        {
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "match_key",
+          "type": "pubkey"
+        },
+        {
+          "name": "round",
+          "type": "u8"
         }
       ]
     },
@@ -1331,6 +1979,64 @@
       ]
     },
     {
+      "name": "initialize_oracle_unpriced",
+      "discriminator": [
+        188,
+        73,
+        147,
+        69,
+        63,
+        53,
+        22,
+        176
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "feed_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "feed_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "initialize_pit",
       "discriminator": [
         81,
@@ -1514,6 +2220,35 @@
       ]
     },
     {
+      "name": "migrate_legacy_match",
+      "discriminator": [
+        80,
+        223,
+        229,
+        111,
+        100,
+        131,
+        230,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "match_state",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "next_round",
       "discriminator": [
         71,
@@ -1630,12 +2365,7 @@
         },
         {
           "name": "taker",
-          "writable": true,
           "signer": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -1719,10 +2449,6 @@
           "name": "payer",
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -1739,6 +2465,38 @@
           "type": "i64"
         }
       ]
+    },
+    {
+      "name": "prepare_rfq_round",
+      "discriminator": [
+        74,
+        28,
+        14,
+        237,
+        236,
+        55,
+        241,
+        164
+      ],
+      "accounts": [
+        {
+          "name": "match_state"
+        },
+        {
+          "name": "round",
+          "writable": true
+        },
+        {
+          "name": "taker",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "process_undelegation",
@@ -1844,6 +2602,36 @@
           }
         }
       ]
+    },
+    {
+      "name": "release_active_match",
+      "discriminator": [
+        8,
+        95,
+        176,
+        97,
+        129,
+        250,
+        112,
+        240
+      ],
+      "accounts": [
+        {
+          "name": "pit",
+          "writable": true
+        },
+        {
+          "name": "match_state"
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "pit"
+          ]
+        }
+      ],
+      "args": []
     },
     {
       "name": "resolve_round",
@@ -2447,10 +3235,7 @@
         },
         {
           "name": "authority",
-          "signer": true,
-          "relations": [
-            "match_state"
-          ]
+          "signer": true
         }
       ],
       "args": []
@@ -2685,10 +3470,7 @@
         },
         {
           "name": "authority",
-          "signer": true,
-          "relations": [
-            "oracle"
-          ]
+          "signer": true
         }
       ],
       "args": []
@@ -2852,7 +3634,7 @@
     {
       "code": 6007,
       "name": "NotEnoughPlayers",
-      "msg": "at least three players are required to start"
+      "msg": "at least two players are required to trade"
     },
     {
       "code": 6008,
@@ -3058,6 +3840,26 @@
       "code": 6048,
       "name": "InvalidSessionActionMask",
       "msg": "session action mask contains an unauthorized action"
+    },
+    {
+      "code": 6049,
+      "name": "NotMatchHost",
+      "msg": "only the first joined player can start the match"
+    },
+    {
+      "code": 6050,
+      "name": "InvalidMatchAccount",
+      "msg": "match account is invalid or uses an unsupported layout"
+    },
+    {
+      "code": 6051,
+      "name": "ActiveMatchMismatch",
+      "msg": "the supplied match is not the pit's active match"
+    },
+    {
+      "code": 6052,
+      "name": "MatchNotReleasable",
+      "msg": "the active match has progressed and cannot be released"
     }
   ],
   "types": [

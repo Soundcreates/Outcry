@@ -3,39 +3,60 @@ import { parseTradeIntent, type TradeIntent } from "./tradeIntent";
 
 type Props = {
   active: boolean;
+  matchId?: string;
+  role?: "PLAYER" | "SPECTATOR";
+  sessionId?: string;
   onConfirm?: (intent: TradeIntent) => void;
   onSubmit?: (intent: TradeIntent) => Promise<void>;
 };
 
-type Recognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onerror: ((event?: { error?: string }) => void) | null;
-  onnomatch?: (() => void) | null;
-  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
+const worldHttp = import.meta.env.VITE_WORLD_HTTP ||
+  (import.meta.env.VITE_WORLD_WS || "ws://localhost:2567").replace(/^ws/, "http");
 
-type RecognitionConstructor = new () => Recognition;
+function speechError(reason: unknown) {
+  const detail = reason instanceof Error
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : "";
+  if (/429|speech_rate_limited|too_many_requests|rate.?limit/i.test(detail)) {
+    return "Groq speech is temporarily rate-limited. Wait a few seconds, then try again or use typed fallback.";
+  }
+  if (/speech_transcription_not_configured/i.test(detail)) {
+    return "Speech transcription is not configured on the world server; use typed fallback.";
+  }
+  return "Groq speech transcription failed; use typed fallback and try again.";
+}
 
-export default function TradeIntentPanel({ active, onConfirm, onSubmit }: Props) {
-  const recognitionRef = useRef<Recognition | undefined>(undefined);
+export default function TradeIntentPanel({ active, matchId, role = "PLAYER", sessionId, onConfirm, onSubmit }: Props) {
+  const recorderRef = useRef<MediaRecorder | undefined>(undefined);
+  const streamRef = useRef<MediaStream | undefined>(undefined);
+  const chunksRef = useRef<Blob[]>([]);
+  const stopTimerRef = useRef<number | undefined>(undefined);
+  const transcriptionInFlightRef = useRef(false);
   const [input, setInput] = useState("");
   const [transcript, setTranscript] = useState("");
   const [draft, setDraft] = useState<TradeIntent | null>(null);
   const [listening, setListening] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => () => recognitionRef.current?.stop(), []);
+  useEffect(() => () => {
+    if (stopTimerRef.current !== undefined) window.clearTimeout(stopTimerRef.current);
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
 
   if (!active) {
-    return <p className="trade-intent-inactive">Spectator view · voice and quote controls are private to the active taker.</p>;
+    return <p className="trade-intent-inactive">
+      {role === "SPECTATOR"
+        ? "Spectator view · voice and quote controls are private to the active taker."
+        : "Waiting for your turn · voice and quote controls appear when the HUD says YOUR TURN."}
+    </p>;
   }
 
   const parse = (value: string) => {
@@ -48,37 +69,95 @@ export default function TradeIntentPanel({ active, onConfirm, onSubmit }: Props)
     setError(parsed ? "" : "Use BUY or SELL + 1, 2, or 5 SOL.");
   };
 
-  const startListening = () => {
-    const speech = window as unknown as { SpeechRecognition?: RecognitionConstructor; webkitSpeechRecognition?: RecognitionConstructor };
-    const Constructor = speech.SpeechRecognition ?? speech.webkitSpeechRecognition;
-    if (!Constructor) {
-      setError("Browser speech input unavailable; use typed fallback.");
+  const stopListening = () => {
+    if (stopTimerRef.current !== undefined) {
+      window.clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = undefined;
+    }
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+  };
+
+  const startListening = async () => {
+    if (starting || listening || transcribing) return;
+    if (!sessionId || !matchId) {
+      setError("World session is unavailable; reconnect and try again.");
       return;
     }
-    const recognition = new Constructor();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.onresult = (event) => parse(event.results[0]?.[0]?.transcript ?? "");
-    recognition.onnomatch = () => {
-      setListening(false);
-      setError("No trade phrase was recognized; say BUY or SELL plus 1, 2, or 5 SOL.");
-    };
-    recognition.onerror = (event) => {
-      setListening(false);
-      setError(event?.error === "not-allowed"
-        ? "Speech permission was denied; allow microphone access or use typed fallback."
-        : "Speech input failed; use typed fallback.");
-    };
-    recognition.onend = () => setListening(false);
-    recognitionRef.current = recognition;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("Audio recording is unavailable; use typed fallback.");
+      return;
+    }
+
+    setStarting(true);
     setError("");
-    setListening(true);
     try {
-      recognition.start();
-    } catch {
-      setListening(false);
-      setError("Could not start browser speech input; use typed fallback.");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+        .find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        recorderRef.current = undefined;
+        streamRef.current = undefined;
+        transcriptionInFlightRef.current = false;
+        setStarting(false);
+        setListening(false);
+        setError("Audio recording failed; use typed fallback.");
+      };
+      recorder.onstop = async () => {
+        if (transcriptionInFlightRef.current) return;
+        transcriptionInFlightRef.current = true;
+        stream.getTracks().forEach((track) => track.stop());
+        recorderRef.current = undefined;
+        streamRef.current = undefined;
+        setListening(false);
+        const audio = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        if (audio.size === 0) {
+          transcriptionInFlightRef.current = false;
+          setError("No audio was captured; try the voice command again.");
+          return;
+        }
+        setTranscribing(true);
+        try {
+          const response = await fetch(`${worldHttp}/api/speech/transcribe`, {
+            method: "POST",
+            headers: {
+              "content-type": audio.type || "audio/webm",
+              "x-outcry-match-id": matchId,
+              "x-outcry-session-id": sessionId,
+            },
+            body: audio,
+          });
+          const payload = await response.json() as { error?: string; text?: string };
+          if (!response.ok) throw new Error(payload.error ?? "speech_transcription_failed");
+          const text = payload.text ?? "";
+          if (!text.trim()) throw new Error("speech_empty");
+          parse(text);
+        } catch (reason) {
+          setError(reason instanceof Error && reason.message === "speech_empty"
+            ? "No trade phrase was recognized; say BUY or SELL plus 1, 2, or 5 SOL."
+            : speechError(reason));
+        } finally {
+          transcriptionInFlightRef.current = false;
+          setTranscribing(false);
+        }
+      };
+      recorder.start();
+      setStarting(false);
+      setListening(true);
+      stopTimerRef.current = window.setTimeout(stopListening, 8_000);
+    } catch (reason) {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      setStarting(false);
+      setError(reason instanceof DOMException && reason.name === "NotAllowedError"
+        ? "Microphone permission was denied; allow access or use typed fallback."
+        : "Could not start audio recording; use typed fallback.");
     }
   };
 
@@ -107,14 +186,16 @@ export default function TradeIntentPanel({ active, onConfirm, onSubmit }: Props)
       <div className="trade-intent-heading">
         <div>
           <p className="eyebrow">ROUND INTENT</p>
-          <strong>Click Start voice command, then say “buy five SOL”.</strong>
+          <strong>Click Start voice command, say “buy five SOL”, then stop recording.</strong>
         </div>
         <span className={listening ? "trade-listening" : "trade-ready"} role="status">
-          {listening ? "Listening…" : "Ready"}
+          {starting ? "Preparing microphone…" : transcribing ? "Transcribing…" : listening ? "Listening…" : "Ready"}
         </span>
       </div>
       <div className="trade-intent-actions">
-        <button disabled={listening} onClick={startListening} type="button">{listening ? "Listening…" : "Start voice command"}</button>
+        <button disabled={starting || transcribing} onClick={() => listening ? stopListening() : void startListening()} type="button">
+          {starting ? "Preparing microphone…" : transcribing ? "Transcribing…" : listening ? "Stop voice command" : "Start voice command"}
+        </button>
         <form onSubmit={(event) => { event.preventDefault(); parse(input); }}>
           <input aria-label="Typed trade intent" onChange={(event) => setInput(event.target.value)} placeholder="buy two SOL" value={input} />
           <button type="submit">Parse typed</button>

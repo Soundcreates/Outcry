@@ -7,6 +7,7 @@ const validData = Buffer.alloc(373);
 Buffer.from([236, 63, 169, 38, 15, 56, 196, 162]).copy(validData);
 
 assert.equal(isValidMatchAccount({ owner: programId, data: validData }, programId), true);
+assert.equal(isValidMatchAccount({ owner: new PublicKey("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"), data: validData }, programId), true);
 assert.equal(isValidMatchAccount(null, programId), false);
 assert.equal(isValidMatchAccount({ owner: PublicKey.unique(), data: validData }, programId), false);
 const legacyData = Buffer.alloc(372);

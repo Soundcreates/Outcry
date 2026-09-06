@@ -14,5 +14,14 @@ assert.deepEqual(parseTradeIntent("buy two sol"), { side: "BUY", baseAsset: "SOL
 assert.equal(parseTradeIntent("buy twenty sol"), null);
 const panelSource = await readFile(new URL("./TradeIntentPanel.tsx", import.meta.url), "utf8");
 assert.doesNotMatch(panelSource, /joinMatchOnchain|sendTransaction|signTransaction/);
+assert.doesNotMatch(panelSource, /SpeechRecognition|webkitSpeechRecognition/);
+assert.doesNotMatch(panelSource, /puter|Puter/);
+assert.match(panelSource, /MediaRecorder/);
+assert.match(panelSource, /api\/speech\/transcribe/);
+assert.match(panelSource, /x-outcry-session-id/);
+assert.match(panelSource, /x-outcry-match-id/);
+assert.match(panelSource, /rate-limited/);
+const indexSource = await readFile(new URL("../../index.html", import.meta.url), "utf8");
+assert.doesNotMatch(indexSource, /puter/);
 assert.match(panelSource, /onConfirm\?\.\(draft\)/);
 console.log("trade intent: 100 corpus phrases, unsupported/ambiguous rejection, and draft-only parser pass");

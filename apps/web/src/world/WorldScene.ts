@@ -390,7 +390,7 @@ export class WorldScene extends Phaser.Scene {
         pitId: value.seat.pitId,
         seatIndex: value.seat.seatIndex,
         matchAddress: this.room?.state.pits.get(value.seat.pitId)?.activeMatchId || undefined,
-        chainConfirmed: value.action === "restored",
+        chainConfirmed: value.action === "confirmed" || value.action === "restored",
       });
     }
     if (value.accepted && value.action === "released") {

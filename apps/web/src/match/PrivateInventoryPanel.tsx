@@ -19,9 +19,9 @@ export default function PrivateInventoryPanel({ matchAddress, playerAddress, pro
 
   const unlock = async () => {
     const wallet = window.solana;
-    if (!matchAddress || !playerAddress || !wallet?.publicKey || !wallet.signMessage) {
+    if (!matchAddress || !playerAddress || !wallet?.publicKey || !wallet.signMessage || !wallet.signTransaction) {
       setStatus("error");
-      setError("wallet_message_signing_unavailable");
+      setError(!wallet?.signMessage ? "wallet_message_signing_unavailable" : "wallet_transaction_signing_unavailable");
       return;
     }
     if (!teeRpc) {

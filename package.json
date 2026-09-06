@@ -19,7 +19,7 @@
     "prepare:devnet-match": "node --env-file=.env tools/prepare-devnet-match.mjs",
     "prepare:devnet-match-tx": "node --env-file=.env tools/prepare-devnet-match-tx.mjs",
     "build:program": "node tools/build-program.mjs",
-    "deploy:program": "pnpm build:program && anchor program deploy --program-name outcry --commitment confirmed -- --use-rpc --max-sign-attempts 20 --with-compute-unit-price 10000",
+    "deploy:program": "pnpm build:program && node --env-file-if-exists=.env tools/deploy-program.mjs",
     "dev:web": "pnpm --filter @outcry/web dev",
     "dev:world": "pnpm --filter @outcry/world-server dev"
   },

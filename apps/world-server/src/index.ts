@@ -1,7 +1,8 @@
 import express, { type Request, type Response } from "express";
-import { Server } from "colyseus";
+import { matchMaker, Server } from "colyseus";
 import { readServerEnv } from "@outcry/shared/env";
 import { mintLiveKitToken, parseLiveKitTokenRequest } from "./media/livekit";
+import { GroqTranscriptionError, transcribeWithGroq } from "./media/groq";
 import { WorldRoom } from "./world/WorldRoom";
 
 const env = readServerEnv();
@@ -10,6 +11,9 @@ const port = Number(process.env.PORT ?? 2567);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("PORT must be an integer between 1 and 65535");
 }
+
+matchMaker.controller.DEFAULT_CORS_HEADERS["Access-Control-Allow-Headers"] =
+  "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Outcry-Match-Id, X-Outcry-Session-Id";
 
 const gameServer = new Server({
   express: (app) => {
@@ -62,6 +66,44 @@ const gameServer = new Server({
         response.status(500).json({ error: "livekit_token_failed" });
       }
     });
+    app.post(
+      "/api/speech/transcribe",
+      express.raw({ type: "audio/*", limit: "25mb" }),
+      async (request: Request, response: Response) => {
+        const sessionId = request.header("x-outcry-session-id");
+        const matchId = request.header("x-outcry-match-id");
+        if (!sessionId || !matchId || !WorldRoom.isActiveSession(sessionId)) {
+          response.status(403).json({ error: "inactive_world_session" });
+          return;
+        }
+        if (!WorldRoom.isKnownPitId(matchId) || !WorldRoom.canJoinMedia(sessionId, matchId)) {
+          response.status(403).json({ error: "seat_membership_required" });
+          return;
+        }
+        if (!env.GROQ_API_KEY) {
+          response.status(503).json({ error: "speech_transcription_not_configured" });
+          return;
+        }
+        if (!Buffer.isBuffer(request.body) || request.body.length === 0) {
+          response.status(400).json({ error: "speech_audio_required" });
+          return;
+        }
+        try {
+          const text = await transcribeWithGroq({
+            apiKey: env.GROQ_API_KEY,
+            audio: request.body,
+            contentType: request.header("content-type") ?? "audio/webm",
+          });
+          response.status(200).json({ text });
+        } catch (reason) {
+          if (reason instanceof GroqTranscriptionError) {
+            response.status(reason.status).json({ error: reason.code });
+            return;
+          }
+          response.status(502).json({ error: "speech_upstream_failed" });
+        }
+      },
+    );
   },
 });
 gameServer.define("world", WorldRoom);

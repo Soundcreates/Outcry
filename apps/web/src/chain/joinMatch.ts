@@ -4,6 +4,7 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
+import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import outcryIdl from "./idl/outcry.json";
 import { decodePublicMatchAccount } from "./matchState";
 
@@ -17,6 +18,9 @@ const INITIALIZE_PIT_DISCRIMINATOR = Uint8Array.from(initializePitIdl.discrimina
 const createMatchIdl = outcryIdl.instructions.find((instruction) => instruction.name === "create_match");
 if (!createMatchIdl) throw new Error("outcry_idl_missing_create_match");
 const CREATE_MATCH_DISCRIMINATOR = Uint8Array.from(createMatchIdl.discriminator);
+const releaseActiveMatchIdl = outcryIdl.instructions.find((instruction) => instruction.name === "release_active_match");
+if (!releaseActiveMatchIdl) throw new Error("outcry_idl_missing_release_active_match");
+const RELEASE_ACTIVE_MATCH_DISCRIMINATOR = Uint8Array.from(releaseActiveMatchIdl.discriminator);
 
 type WalletProvider = {
   publicKey: PublicKey | null;
@@ -118,6 +122,23 @@ export function createCreateMatchInstruction(input: {
   });
 }
 
+export function createReleaseActiveMatchInstruction(input: {
+  pitAddress: string;
+  matchAddress: string;
+  authorityAddress: string;
+  programId: string;
+}) {
+  return new TransactionInstruction({
+    programId: new PublicKey(input.programId),
+    keys: [
+      { pubkey: new PublicKey(input.pitAddress), isWritable: true, isSigner: false },
+      { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+      { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
+    ],
+    data: Uint8Array.from(RELEASE_ACTIVE_MATCH_DISCRIMINATOR) as unknown as Buffer,
+  });
+}
+
 async function simulateUnsignedTransaction(connection: Connection, transaction: Transaction) {
   const response = await fetch(connection.rpcEndpoint, {
     method: "POST",
@@ -197,9 +218,6 @@ export async function bootstrapMatchOnchain(input: {
   const authority = new PublicKey(connected.publicKey);
   const programId = new PublicKey(input.programId);
   const { pit, match } = matchBootstrapAddresses(input);
-  if (input.expectedMatchAddress && !match.equals(new PublicKey(input.expectedMatchAddress))) {
-    throw new Error("match_bootstrap_address_mismatch");
-  }
   const connection = new Connection(input.rpcUrl, "confirmed");
   const [programInfo, pitInfo, matchInfo] = await Promise.all([
     connection.getAccountInfo(programId, "confirmed"),
@@ -208,13 +226,25 @@ export async function bootstrapMatchOnchain(input: {
   ]);
   if (!programInfo?.executable) throw new Error("outcry_program_not_deployed");
   if (matchInfo?.owner.equals(programId)) return { status: "already_initialized" as const, matchAddress: match.toBase58() };
-  if (matchInfo) throw new Error("match_account_program_mismatch");
   if (pitInfo && !pitInfo.owner.equals(programId)) throw new Error("pit_account_program_mismatch");
+  let activeMatch: PublicKey | undefined;
   if (pitInfo) {
     if (pitInfo.data.length < 40) throw new Error("pit_account_invalid");
     const pitAuthority = new PublicKey(pitInfo.data.subarray(8, 40));
     if (!pitAuthority.equals(authority)) throw new Error(`pit_authority_mismatch: connect ${pitAuthority.toBase58()}`);
+    if (pitInfo.data.length < 105) throw new Error("pit_account_invalid");
+    activeMatch = new PublicKey(pitInfo.data.subarray(73, 105));
   }
+  if (input.expectedMatchAddress && !match.equals(new PublicKey(input.expectedMatchAddress))) {
+    if (activeMatch && activeMatch.equals(new PublicKey(input.expectedMatchAddress))) {
+      throw new Error(`pit_has_active_match:${activeMatch.toBase58()}`);
+    }
+    throw new Error("match_bootstrap_address_mismatch");
+  }
+  if (activeMatch && !activeMatch.equals(PublicKey.default)) {
+    throw new Error(`pit_has_active_match:${activeMatch.toBase58()}`);
+  }
+  if (matchInfo) throw new Error("match_account_program_mismatch");
 
   const transaction = new Transaction();
   if (!pitInfo) transaction.add(createInitializePitInstruction({
@@ -242,6 +272,61 @@ export async function bootstrapMatchOnchain(input: {
   return { status: "initialized" as const, matchAddress: match.toBase58(), signature };
 }
 
+export async function readActivePitMatchOnchain(input: {
+  pitId: string;
+  rpcUrl: string;
+  programId: string;
+}) {
+  const connection = new Connection(input.rpcUrl, "confirmed");
+  const { pit } = matchBootstrapAddresses({ pitId: input.pitId, nonce: 0n, programId: input.programId });
+  const pitInfo = await connection.getAccountInfo(pit, "confirmed");
+  if (!pitInfo) return undefined;
+  if (!pitInfo.owner.equals(new PublicKey(input.programId))) throw new Error("pit_account_program_mismatch");
+  if (pitInfo.data.length < 105) throw new Error("pit_account_invalid");
+  const activeMatch = new PublicKey(pitInfo.data.subarray(73, 105));
+  return activeMatch.equals(PublicKey.default) ? undefined : activeMatch.toBase58();
+}
+
+export async function releaseActiveMatchOnchain(input: {
+  pitId: string;
+  activeMatchAddress: string;
+  rpcUrl: string;
+  programId: string;
+  onWalletApprovalRequested?: () => void;
+}) {
+  const wallet = window.solana;
+  if (!wallet) throw new Error("solana_wallet_not_found");
+  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
+  const authority = new PublicKey(connected.publicKey);
+  const connection = new Connection(input.rpcUrl, "confirmed");
+  const { pit } = matchBootstrapAddresses({ pitId: input.pitId, nonce: 0n, programId: input.programId });
+  const pitInfo = await connection.getAccountInfo(pit, "confirmed");
+  if (!pitInfo) throw new Error("pit_account_not_initialized");
+  if (!pitInfo.owner.equals(new PublicKey(input.programId))) throw new Error("pit_account_program_mismatch");
+  if (pitInfo.data.length < 105) throw new Error("pit_account_invalid");
+  const pitAuthority = new PublicKey(pitInfo.data.subarray(8, 40));
+  if (!pitAuthority.equals(authority)) throw new Error(`pit_authority_mismatch: connect ${pitAuthority.toBase58()}`);
+  const activeMatch = new PublicKey(pitInfo.data.subarray(73, 105));
+  const requestedMatch = new PublicKey(input.activeMatchAddress);
+  if (!activeMatch.equals(requestedMatch)) throw new Error("pit_active_match_changed");
+
+  const transaction = new Transaction().add(createReleaseActiveMatchInstruction({
+    pitAddress: pit.toBase58(),
+    matchAddress: requestedMatch.toBase58(),
+    authorityAddress: authority.toBase58(),
+    programId: input.programId,
+  }));
+  transaction.feePayer = authority;
+  const blockhash = await connection.getLatestBlockhash("confirmed");
+  transaction.recentBlockhash = blockhash.blockhash;
+  transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
+  const simulation = await simulateUnsignedTransaction(connection, transaction);
+  if (simulation.err) throw new Error(`release_active_match_simulation_failed: ${simulationError(simulation)}`);
+  input.onWalletApprovalRequested?.();
+  const signature = await sendAndConfirmWalletTransaction(connection, wallet, transaction, blockhash);
+  return { status: "released" as const, signature };
+}
+
 export function validateJoinAccounts(
   programInfo: { executable: boolean } | null,
   matchInfo: { owner: PublicKey } | null,
@@ -249,7 +334,9 @@ export function validateJoinAccounts(
 ) {
   if (!programInfo?.executable) throw new Error("outcry_program_not_deployed");
   if (!matchInfo) throw new Error("match_account_not_initialized");
-  if (!matchInfo.owner.equals(programId)) throw new Error("match_account_program_mismatch");
+  if (!matchInfo.owner.equals(programId) && !matchInfo.owner.equals(DELEGATION_PROGRAM_ID)) {
+    throw new Error("match_account_program_mismatch");
+  }
 }
 
 export function validateWalletBalance(balanceLamports: number) {

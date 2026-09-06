@@ -10,6 +10,7 @@ const tests = [
   "apps/web/src/chain/privacy.test.ts",
   "apps/web/src/chain/matchState.test.ts",
   "apps/web/src/match/tradeIntent.test.ts",
+  "apps/world-server/src/media/groq.test.ts",
   "apps/web/src/world/PitOverlay.test.ts",
   "apps/web/src/world/WorldScene.test.ts",
   "apps/web/src/world/WorldCanvas.test.ts",

@@ -4,6 +4,8 @@ import { Connection, PublicKey } from "@solana/web3.js";
 // Newer builds allocate 373; all fields used here end before that optional byte.
 const MATCH_ACCOUNT_BYTES = new Set([372, 373]);
 const MATCH_ACCOUNT_DISCRIMINATOR = Buffer.from([236, 63, 169, 38, 15, 56, 196, 162]);
+// MagicBlock owns delegated match accounts while they execute in the TEE.
+const DELEGATION_PROGRAM_ID = new PublicKey("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 const MATCH_STATUS_OFFSET = 80;
 const MATCH_CAPACITY_OFFSET = 81;
 const MATCH_PLAYER_COUNT_OFFSET = 82;
@@ -31,7 +33,7 @@ export function isValidMatchAccount(
   programId: PublicKey,
 ) {
   if (!account) return false;
-  return account.owner.equals(programId)
+  return (account.owner.equals(programId) || account.owner.equals(DELEGATION_PROGRAM_ID))
     && MATCH_ACCOUNT_BYTES.has(account.data.length)
     && account.data.subarray(0, 8).equals(MATCH_ACCOUNT_DISCRIMINATOR);
 }

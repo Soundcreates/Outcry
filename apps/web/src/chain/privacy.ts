@@ -4,6 +4,7 @@ import {
   getAuthToken,
   MAGIC_PROGRAM_ID,
   PERMISSION_PROGRAM_ID,
+  createDelegateInstruction,
   delegateBufferPdaFromDelegatedAccountAndOwnerProgram,
   delegationMetadataPdaFromDelegatedAccount,
   delegationRecordPdaFromDelegatedAccount,
@@ -12,6 +13,7 @@ import {
 } from "@magicblock-labs/ephemeral-rollups-sdk";
 import {
   Connection,
+  Keypair,
   PublicKey,
   SystemProgram,
   Transaction,
@@ -57,6 +59,8 @@ const INIT_PRIVATE_INVENTORY_PERMISSION_DISCRIMINATOR = instructionDiscriminator
 
 // MagicBlock's documented Devnet TEE validator for devnet-tee.magicblock.app.
 const DEVNET_TEE_VALIDATOR = new PublicKey("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo");
+const TEE_FEE_PAYER_TARGET_LAMPORTS = 10_000_000;
+const TEE_FEE_PAYER_STORAGE_PREFIX = "outcry:tee-fee-payer:";
 
 export type PrivateInventoryWallet = {
   publicKey: PublicKey | null;
@@ -144,6 +148,120 @@ export async function createPrivateConnection(input: {
     expiresAt: auth.expiresAt,
     publicKey: input.publicKey,
   };
+}
+
+/**
+ * Prepare a small, per-browser-session fee payer for MagicBlock's TEE.
+ *
+ * A normal wallet is not automatically delegated to the TEE, so using it as
+ * the TEE transaction fee payer produces InvalidAccountForFee. The generated
+ * keypair is funded and delegated on base Devnet once, then signs only the
+ * TEE transaction fee-payer field. The connected wallet remains the program
+ * authority and signs the RFQ instruction itself.
+ */
+export async function ensureTeeFeePayer(input: {
+  baseRpcUrl: string;
+  teeRpcUrl: string;
+  teeConnection: Connection;
+  player: PublicKey;
+  wallet: PrivateInventoryWallet;
+  programId?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  if (!input.wallet.signTransaction) throw new Error("wallet_transaction_signing_unavailable");
+  if (!input.wallet.publicKey?.equals(input.player)) throw new Error("tee_fee_payer_wallet_mismatch");
+
+  const feePayer = loadTeeFeePayer(`${TEE_FEE_PAYER_STORAGE_PREFIX}${input.teeRpcUrl}:${programId.toBase58()}`);
+  const baseConnection = new Connection(input.baseRpcUrl, "confirmed");
+  let account = await baseConnection.getAccountInfo(feePayer.publicKey, "confirmed");
+
+  if (!account) {
+    await sendWalletTransaction({
+      connection: baseConnection,
+      wallet: input.wallet,
+      payer: input.player,
+      label: "tee_fee_payer_funding",
+      instructions: [SystemProgram.transfer({
+        fromPubkey: input.player,
+        toPubkey: feePayer.publicKey,
+        lamports: TEE_FEE_PAYER_TARGET_LAMPORTS,
+      })],
+    });
+    account = await baseConnection.getAccountInfo(feePayer.publicKey, "confirmed");
+  } else if (account.owner.equals(SystemProgram.programId) && account.lamports < TEE_FEE_PAYER_TARGET_LAMPORTS) {
+    await sendWalletTransaction({
+      connection: baseConnection,
+      wallet: input.wallet,
+      payer: input.player,
+      label: "tee_fee_payer_refunding",
+      instructions: [SystemProgram.transfer({
+        fromPubkey: input.player,
+        toPubkey: feePayer.publicKey,
+        lamports: TEE_FEE_PAYER_TARGET_LAMPORTS - account.lamports,
+      })],
+    });
+    account = await baseConnection.getAccountInfo(feePayer.publicKey, "confirmed");
+  }
+
+  if (!account) throw new Error("tee_fee_payer_funding_failed");
+  if (account.owner.equals(SystemProgram.programId)) {
+    const transaction = new Transaction().add(
+      SystemProgram.assign({ accountPubkey: feePayer.publicKey, programId: DELEGATION_PROGRAM_ID }),
+      createDelegateInstruction({
+        payer: input.player,
+        delegatedAccount: feePayer.publicKey,
+        ownerProgram: SystemProgram.programId,
+        validator: teeValidatorForRpc(input.teeRpcUrl),
+      }),
+    );
+    transaction.feePayer = input.player;
+    const blockhash = await baseConnection.getLatestBlockhash("confirmed");
+    transaction.recentBlockhash = blockhash.blockhash;
+    transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
+    const simulation = await baseConnection.simulateTransaction(transaction);
+    if (simulation.value.err) {
+      const relevantLog = simulation.value.logs?.find((log) => /Error|failed|constraint|missing|insufficient/i.test(log));
+      throw new Error(`tee_fee_payer_delegation_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
+    }
+    transaction.partialSign(feePayer);
+    const signed = await input.wallet.signTransaction(transaction);
+    const signature = await baseConnection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 5 });
+    const confirmation = await baseConnection.confirmTransaction({
+      signature,
+      blockhash: blockhash.blockhash,
+      lastValidBlockHeight: blockhash.lastValidBlockHeight,
+    }, "confirmed");
+    if (confirmation.value.err) throw new Error(`tee_fee_payer_delegation_failed: ${JSON.stringify(confirmation.value.err)}`);
+  } else if (!account.owner.equals(DELEGATION_PROGRAM_ID)) {
+    throw new Error("tee_fee_payer_account_invalid");
+  }
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const teeAccount = await input.teeConnection.getAccountInfo(feePayer.publicKey, "confirmed");
+    if (teeAccount) return feePayer;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error("tee_fee_payer_unavailable");
+}
+
+function loadTeeFeePayer(storageKey: string) {
+  if (typeof window === "undefined") throw new Error("tee_fee_payer_browser_required");
+  try {
+    const stored = window.sessionStorage.getItem(storageKey);
+    if (stored) {
+      const secretKey = JSON.parse(stored);
+      if (Array.isArray(secretKey) && secretKey.length === 64) return Keypair.fromSecretKey(Uint8Array.from(secretKey));
+    }
+  } catch {
+    // A stale or unavailable session entry is safely replaced below.
+  }
+  const feePayer = Keypair.generate();
+  try {
+    window.sessionStorage.setItem(storageKey, JSON.stringify(Array.from(feePayer.secretKey)));
+  } catch {
+    throw new Error("tee_fee_payer_storage_unavailable");
+  }
+  return feePayer;
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array) {
@@ -279,7 +397,7 @@ export async function unlockPrivateInventory(input: {
         createDelegatePrivateInventoryInstruction({
           matchAddress: input.matchAddress,
           player: input.player,
-          validator: input.teeValidator ?? validatorForTeeRpc(input.teeRpcUrl),
+          validator: input.teeValidator ?? teeValidatorForRpc(input.teeRpcUrl),
           programId,
         }),
       ],
@@ -296,7 +414,7 @@ export async function unlockPrivateInventory(input: {
         instructions: [createDelegatePrivateInventoryInstruction({
           matchAddress: input.matchAddress,
           player: input.player,
-          validator: input.teeValidator ?? validatorForTeeRpc(input.teeRpcUrl),
+          validator: input.teeValidator ?? teeValidatorForRpc(input.teeRpcUrl),
           programId,
         })],
       });
@@ -311,8 +429,27 @@ export async function unlockPrivateInventory(input: {
     publicKey: input.player,
     signMessage: async (message) => signedMessage(input.wallet, message),
   });
+  let teeFeePayer: Keypair | undefined;
+  const initializePermission = async () => {
+    teeFeePayer ??= await ensureTeeFeePayer({
+      baseRpcUrl: input.baseRpcUrl,
+      teeRpcUrl: input.teeRpcUrl,
+      teeConnection: session.connection,
+      player: input.player,
+      wallet: input.wallet,
+      programId,
+    });
+    await initializePrivateInventoryPermission({
+      connection: session.connection,
+      wallet: input.wallet,
+      feePayer: teeFeePayer,
+      matchAddress: input.matchAddress,
+      player: input.player,
+      programId,
+    });
+  };
   if (delegatedNow) {
-    await initializePrivateInventoryPermission({ connection: session.connection, wallet: input.wallet, matchAddress: input.matchAddress, player: input.player, programId });
+    await initializePermission();
     session = await createPrivateConnection({
       teeRpcUrl: input.teeRpcUrl,
       publicKey: input.player,
@@ -324,7 +461,7 @@ export async function unlockPrivateInventory(input: {
     return await readOwnPrivateInventory({ connection: session.connection, matchAddress: input.matchAddress, player: input.player, programId });
   } catch (reason) {
     if (delegatedNow || !(reason instanceof Error) || reason.message !== "private_inventory_unavailable") throw reason;
-    await initializePrivateInventoryPermission({ connection: session.connection, wallet: input.wallet, matchAddress: input.matchAddress, player: input.player, programId });
+    await initializePermission();
     const refreshed = await createPrivateConnection({
       teeRpcUrl: input.teeRpcUrl,
       publicKey: input.player,
@@ -340,7 +477,7 @@ function instructionDiscriminator(name: string) {
   return Uint8Array.from(instruction.discriminator);
 }
 
-function validatorForTeeRpc(teeRpcUrl: string) {
+export function teeValidatorForRpc(teeRpcUrl: string) {
   if (new URL(teeRpcUrl).hostname === "devnet-tee.magicblock.app") return DEVNET_TEE_VALIDATOR;
   throw new Error("tee_validator_unconfigured");
 }
@@ -361,18 +498,57 @@ function assertPrivateInventoryIdentity(data: Uint8Array, matchAddress: PublicKe
 async function initializePrivateInventoryPermission(input: {
   connection: Connection;
   wallet: PrivateInventoryWallet;
+  feePayer: Keypair;
   matchAddress: PublicKey;
   player: PublicKey;
   programId: PublicKey;
 }) {
-  await sendWalletTransaction({
+  await sendTeeTransaction({
     connection: input.connection,
     wallet: input.wallet,
-    payer: input.player,
+    feePayer: input.feePayer,
     label: "private_inventory_permission",
     instructions: [createInitPrivateInventoryPermissionInstruction(input)],
-    requireSignTransaction: true,
   });
+}
+
+async function sendTeeTransaction(input: {
+  connection: Connection;
+  wallet: PrivateInventoryWallet;
+  feePayer: Keypair;
+  label: string;
+  instructions: TransactionInstruction[];
+}) {
+  if (!input.wallet.signTransaction) throw new Error("wallet_transaction_signing_unavailable");
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const transaction = new Transaction().add(...input.instructions);
+    transaction.feePayer = input.feePayer.publicKey;
+    const blockhash = await input.connection.getLatestBlockhash("confirmed");
+    transaction.recentBlockhash = blockhash.blockhash;
+    transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
+    transaction.partialSign(input.feePayer);
+    const simulation = await input.connection.simulateTransaction(transaction);
+    if (simulation.value.err) {
+      const relevantLog = simulation.value.logs?.find((log) => /Error|failed|constraint|missing|insufficient/i.test(log));
+      throw new Error(`${input.label}_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
+    }
+    try {
+      const signed = await input.wallet.signTransaction(transaction);
+      const signature = await input.connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 5 });
+      for (let poll = 0; poll < 60; poll += 1) {
+        const status = (await input.connection.getSignatureStatuses([signature])).value[0];
+        if (status?.err || status?.confirmationStatus) {
+          if (status.err) throw new Error(`${input.label}_transaction_failed: ${JSON.stringify(status.err)}`);
+          return signature;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Error("tee_signature_expired");
+    } catch (reason) {
+      if (!(reason instanceof Error) || !/expired|block height exceeded|blockhash not found/i.test(reason.message) || attempt === 2) throw reason;
+    }
+  }
+  throw new Error(`${input.label}_expired_retry_exhausted`);
 }
 
 async function sendWalletTransaction(input: {

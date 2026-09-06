@@ -1378,7 +1378,7 @@
             {
               "name": "minPlayers",
               "type": "int",
-              "value": 3
+              "value": 2
             }
           ]
         },
@@ -1410,7 +1410,7 @@
             {
               "name": "minPlayers",
               "type": "int",
-              "value": 3
+              "value": 2
             }
           ]
         }

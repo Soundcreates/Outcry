@@ -10,6 +10,7 @@ type Props = {
 };
 
 const teeRpc = import.meta.env.VITE_MAGICBLOCK_TEE_RPC || import.meta.env.NEXT_PUBLIC_MAGICBLOCK_TEE_RPC || "";
+const baseRpc = import.meta.env.VITE_SOLANA_BASE_RPC || "https://api.devnet.solana.com";
 
 export default function PrivateQuotePanel({ active, matchAddress, dealerAddress, round, programId }: Props) {
   const [price, setPrice] = useState("");
@@ -26,7 +27,7 @@ export default function PrivateQuotePanel({ active, matchAddress, dealerAddress,
     setStatus("submitting");
     setError("");
     try {
-      await submitPrivateQuoteOnchain({ teeRpcUrl: teeRpc, matchAddress, dealerAddress, round, priceE6, programId });
+      await submitPrivateQuoteOnchain({ baseRpcUrl: baseRpc, teeRpcUrl: teeRpc, matchAddress, dealerAddress, round, priceE6, programId });
       setStatus("submitted");
     } catch (reason) {
       setStatus("error");

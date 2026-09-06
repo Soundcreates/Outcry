@@ -1,4 +1,5 @@
 import { Connection, PublicKey } from "@solana/web3.js";
+import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import outcryIdl from "./idl/outcry.json";
 
 const MATCH_DISCRIMINATOR = Uint8Array.from(outcryIdl.accounts.find((account) => account.name === "Match")?.discriminator ?? []);
@@ -9,10 +10,16 @@ const MAX_PLAYERS = 4;
 const MAX_ROUNDS = 8;
 const LEGACY_MATCH_BYTES = 372;
 const CURRENT_MATCH_BYTES = 373;
-const ORACLE_FEED_ID = Uint8Array.from("c6ad3e841d9c0f248adff90cf776f839fd59f1cbd8ffbc8f9402883ea16e8420".match(/../g)!.map((byte) => Number.parseInt(byte, 16)));
+export const MATCH_STATE_TIMEOUT_MS = 8_000;
+export const ORACLE_FEED_ID = Uint8Array.from("c6ad3e841d9c0f248adff90cf776f839fd59f1cbd8ffbc8f9402883ea16e8420".match(/../g)!.map((byte) => Number.parseInt(byte, 16)));
+export const ORACLE_PRICE_UPDATE_ADDRESS = "ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu";
 
 export type PublicMatchSnapshot = {
   matchAddress: string;
+  authority: string;
+  pit: string;
+  matchNonce: bigint;
+  host?: string;
   resultAddress?: string;
   status: "WAITING" | "STARTED" | "FINISHED";
   capacity: number;
@@ -61,6 +68,16 @@ function assertMatchAccount(data: Uint8Array) {
   }
 }
 
+function readWithTimeout<T>(operation: Promise<T>, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("match_state_rpc_timeout")), timeoutMs);
+  });
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 export function decodePublicMatchAccount(matchAddress: string, data: Uint8Array): PublicMatchSnapshot {
   const isCurrentLayout = data.length === CURRENT_MATCH_BYTES;
   assertMatchAccount(data);
@@ -70,11 +87,18 @@ export function decodePublicMatchAccount(matchAddress: string, data: Uint8Array)
   if (capacity < 1 || capacity > MAX_PLAYERS) throw new Error("match_capacity_invalid");
   const playerCount = Math.min(data[82], MAX_PLAYERS);
   if (playerCount > capacity) throw new Error("match_player_count_invalid");
+  const authority = keyAt(data, 8);
+  const pit = keyAt(data, 40);
+  const matchNonce = readU64(data, 72);
+  if (authority.equals(PublicKey.default)) throw new Error("match_authority_invalid");
   const playersOffset = isCurrentLayout ? 84 : 83;
   const playerKeys = Array.from({ length: playerCount }, (_, index) => keyAt(data, playersOffset + index * 32));
   if (playerKeys.some((player) => player.equals(PublicKey.default))) throw new Error("match_player_key_invalid");
-  return {
+  const snapshot: PublicMatchSnapshot = {
     matchAddress,
+    authority: authority.toBase58(),
+    pit: pit.toBase58(),
+    matchNonce,
     status: status === 0 ? "WAITING" : status === 1 ? "STARTED" : "FINISHED",
     capacity,
     playerCount,
@@ -84,6 +108,13 @@ export function decodePublicMatchAccount(matchAddress: string, data: Uint8Array)
     dealerCount: Math.max(playerCount - 1, 0),
     settled: false,
   };
+  if (snapshot.status === "STARTED" && snapshot.playerCount > 0) {
+    snapshot.host = snapshot.players[0];
+    snapshot.taker = snapshot.players[snapshot.currentRound % snapshot.playerCount];
+  } else if (snapshot.playerCount > 0) {
+    snapshot.host = snapshot.players[0];
+  }
+  return snapshot;
 }
 
 function decodeRound(snapshot: PublicMatchSnapshot, data: Uint8Array) {
@@ -91,13 +122,26 @@ function decodeRound(snapshot: PublicMatchSnapshot, data: Uint8Array) {
   if (!keyAt(data, 8).equals(new PublicKey(snapshot.matchAddress)) || data[40] !== snapshot.currentRound) throw new Error("round_match_mismatch");
   const side = data[73];
   if (side !== 0 && side !== 1) throw new Error("round_side_invalid");
-  const quantityLots = Number(readU64(data, 74));
-  if (![1, 2, 5].includes(quantityLots)) throw new Error("round_quantity_invalid");
   const roundStatus = data[99];
-  if (roundStatus !== 0 && roundStatus !== 1) throw new Error("round_status_invalid");
+  if (roundStatus !== 0 && roundStatus !== 1 && roundStatus !== 2) throw new Error("round_status_invalid");
+  const quantityLots = Number(readU64(data, 74));
   const taker = keyAt(data, 41);
   if (!snapshot.players.includes(taker.toBase58())) throw new Error("round_taker_invalid");
   snapshot.taker = taker.toBase58();
+  if (quantityLots === 0) {
+    const isPrepared = roundStatus === 2;
+    const isLegacyPrepared = roundStatus === 0
+      && readI64(data, 82) === 0n
+      && readI64(data, 90) === 0n
+      && data[98] === 0
+      && isDefaultKey(data.slice(100, 132))
+      && readI64(data, 132) === 0n
+      && isDefaultKey(data.slice(140, 172))
+      && readI64(data, 172) === 0n;
+    if (!isPrepared && !isLegacyPrepared) throw new Error("round_quantity_invalid");
+    return;
+  }
+  if (![1, 2, 5].includes(quantityLots) || roundStatus === 2) throw new Error("round_quantity_invalid");
   snapshot.side = side === 0 ? "BUY" : "SELL";
   snapshot.quantityLots = quantityLots;
   snapshot.roundStatus = roundStatus === 0 ? "OPEN" : "RESOLVED";
@@ -120,28 +164,41 @@ export async function loadPublicMatchState(input: {
   rpcUrl: string;
   matchAddress: string;
   programId?: string;
+  connection?: Connection;
+  timeoutMs?: number;
 }): Promise<PublicMatchSnapshot> {
   const programId = new PublicKey(input.programId ?? PROGRAM_ID);
   const match = new PublicKey(input.matchAddress);
-  const connection = new Connection(input.rpcUrl, "confirmed");
-  const matchInfo = await connection.getAccountInfo(match, "confirmed");
-  if (!matchInfo || !matchInfo.owner.equals(programId)) throw new Error("match_account_unavailable");
+  const connection = input.connection ?? new Connection(input.rpcUrl, "confirmed");
+  const timeoutMs = input.timeoutMs ?? MATCH_STATE_TIMEOUT_MS;
+  const matchInfo = await readWithTimeout(connection.getAccountInfo(match, "confirmed"), timeoutMs);
+  const matchOwnerIsValid = matchInfo?.owner.equals(programId) || matchInfo?.owner.equals(DELEGATION_PROGRAM_ID);
+  if (!matchInfo || !matchOwnerIsValid) throw new Error("match_account_unavailable");
   const snapshot = decodePublicMatchAccount(match.toBase58(), matchInfo.data);
 
-  if (snapshot.status === "STARTED") {
-    const [round] = PublicKey.findProgramAddressSync(
+  const resultKey = keyAt(matchInfo.data, matchInfo.data.length === CURRENT_MATCH_BYTES ? 340 : 339);
+  const roundKey = snapshot.status === "STARTED"
+    ? PublicKey.findProgramAddressSync(
       [new TextEncoder().encode("round"), match.toBytes(), Uint8Array.of(snapshot.currentRound)],
       programId,
-    );
-    const roundInfo = await connection.getAccountInfo(round, "confirmed");
-    if (roundInfo && roundInfo.owner.equals(programId)) decodeRound(snapshot, roundInfo.data);
+    )[0]
+    : undefined;
+  const relatedKeys = [roundKey, isDefaultKey(resultKey.toBytes()) ? undefined : resultKey].filter(
+    (key): key is PublicKey => Boolean(key),
+  );
+  const relatedAccounts = relatedKeys.length > 0
+    ? await readWithTimeout(connection.getMultipleAccountsInfo(relatedKeys, "confirmed"), timeoutMs)
+    : [];
+
+  if (snapshot.status === "STARTED") {
+    const roundInfo = relatedAccounts[roundKey ? relatedKeys.indexOf(roundKey) : -1];
+    if (roundInfo && (roundInfo.owner.equals(programId) || roundInfo.owner.equals(DELEGATION_PROGRAM_ID))) decodeRound(snapshot, roundInfo.data);
   }
 
-  const resultKey = keyAt(matchInfo.data, matchInfo.data.length === CURRENT_MATCH_BYTES ? 340 : 339);
   if (!isDefaultKey(resultKey.toBytes())) {
     snapshot.resultAddress = resultKey.toBase58();
-    const resultInfo = await connection.getAccountInfo(resultKey, "confirmed");
-    if (resultInfo && resultInfo.owner.equals(programId)) decodeResult(snapshot, resultInfo.data);
+    const resultInfo = relatedAccounts[relatedKeys.indexOf(resultKey)];
+    if (resultInfo && (resultInfo.owner.equals(programId) || resultInfo.owner.equals(DELEGATION_PROGRAM_ID))) decodeResult(snapshot, resultInfo.data);
   }
   return snapshot;
 }

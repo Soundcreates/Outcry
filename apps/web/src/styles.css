@@ -319,6 +319,16 @@ body {
   gap: 1rem;
 }
 
+.match-hud-identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #2b3546;
+}
+
 .match-hud-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -328,6 +338,19 @@ body {
 .match-hud-grid div {
   display: grid;
   gap: 0.25rem;
+}
+
+.match-lobby {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.75rem;
+  color: #d6dbea;
+  background: #1b2230;
+  border: 1px solid #46536a;
+  font: 0.8rem monospace;
 }
 
 .match-hud-grid span,
@@ -340,6 +363,32 @@ body {
 .hud-taker {
   color: #8fe3b0;
   font: 0.75rem monospace;
+}
+
+.hud-host {
+  color: #ffb347;
+  font: 0.8rem monospace;
+}
+
+.hud-state {
+  color: #ffb347;
+  font: 0.8rem monospace;
+}
+
+.hud-loading-meta,
+.hud-error {
+  color: #a9b3c6;
+  font: 0.75rem monospace;
+}
+
+.hud-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  color: #ffb3b3;
+  background: #3b1d24;
 }
 
 .match-result {

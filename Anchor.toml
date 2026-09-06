@@ -9,7 +9,7 @@ skip-lint = false
 outcry = "D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt"
 
 [provider]
-cluster = "https://solana-devnet.g.alchemy.com/v2/uFp3rRJkzmqosOBGtDM6cYysYH0WmufN"
+cluster = "https://api.devnet.solana.com"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

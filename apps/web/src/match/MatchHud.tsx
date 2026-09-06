@@ -6,13 +6,17 @@ type Props = {
   walletAddress?: string;
   error?: string;
   settling?: boolean;
+  starting?: boolean;
+  autoStartIn?: number;
+  onRetry?: () => void;
+  onStart?: () => Promise<void>;
   onSettle?: () => Promise<void>;
   onReturn?: () => void;
 };
 
 const shortKey = (value?: string) => value ? `${value.slice(0, 4)}…${value.slice(-4)}` : "—";
 
-export default function MatchHud({ snapshot, walletAddress, error, settling, onSettle, onReturn }: Props) {
+export default function MatchHud({ snapshot, walletAddress, error, settling, starting, autoStartIn, onRetry, onStart, onSettle, onReturn }: Props) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -25,13 +29,17 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, onS
     return (
       <section className="match-hud" aria-label="Match state">
         <p className="eyebrow">MATCH HUD</p>
-        <strong>{error ?? "Waiting for public match state…"}</strong>
+        <strong className="hud-state" role="status">{error ? `Match state unavailable · ${error}` : "Loading onchain turn state…"}</strong>
+        <span className="hud-loading-meta">HOST: resolving from onchain match state…</span>
+        {error && onRetry && <button onClick={onRetry} type="button">Retry match state</button>}
       </section>
     );
   }
 
   const remaining = snapshot.deadlineAt ? Math.max(0, Math.ceil((snapshot.deadlineAt - now) / 1000)) : undefined;
   const localIsTaker = Boolean(walletAddress && snapshot.taker === walletAddress);
+  const localIsHost = Boolean(walletAddress && snapshot.host === walletAddress);
+  const canStart = localIsHost && snapshot.status === "WAITING" && snapshot.playerCount >= 2;
   const finalScores = snapshot.finalScoresE6?.slice(0, snapshot.playerCount) ?? [];
   const localIndex = walletAddress ? snapshot.players.indexOf(walletAddress) : -1;
   const localScore = localIndex >= 0 ? finalScores[localIndex] : undefined;
@@ -41,21 +49,56 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, onS
 
   return (
     <section className="match-hud" aria-label="Match state">
+      <div className="match-hud-identity" role="status">
+        <strong className={localIsHost ? "hud-host" : "hud-muted"}>
+          {localIsHost ? "YOU ARE THE HOST" : `HOST: ${shortKey(snapshot.host)}`}
+        </strong>
+        <span className="hud-muted">{snapshot.playerCount}/{snapshot.capacity} onchain players seated</span>
+      </div>
       <div className="match-hud-topline">
         <div>
           <p className="eyebrow">MATCH HUD</p>
           <strong>{snapshot.status} · ROUND {snapshot.currentRound + 1}/8</strong>
         </div>
         <span className={localIsTaker ? "hud-taker" : "hud-muted"} role="status">
-          {localIsTaker ? "YOUR TURN" : `TAKER ${shortKey(snapshot.taker)}`}
+          {localIsTaker
+            ? "YOUR TURN · START VOICE"
+            : snapshot.status === "WAITING" && localIsHost
+              ? "HOST · READY TO START"
+              : snapshot.status === "WAITING"
+                ? `WAITING FOR HOST ${shortKey(snapshot.host)}`
+                : snapshot.status === "STARTED" && snapshot.taker
+                  ? `WAITING FOR ${shortKey(snapshot.taker)}`
+                  : "WAITING FOR MATCH STATE"}
         </span>
       </div>
+      {error && <div className="hud-error" role="alert">
+        <span>Onchain state refresh failed · {error}</span>
+        {onRetry && <button onClick={onRetry} type="button">Retry</button>}
+      </div>}
       <div className="match-hud-grid">
         <div><span>Intent</span><strong>{snapshot.side ? `${snapshot.side} ${snapshot.quantityLots} SOL` : "Waiting"}</strong></div>
         <div><span>Quotes sealed</span><strong>{snapshot.quoteCount}/{snapshot.dealerCount}</strong></div>
         <div><span>Round clock</span><strong>{remaining === undefined ? "—" : `${remaining}s`}</strong></div>
         <div><span>Private inventory</span><strong>Only you · TEE sync</strong></div>
       </div>
+      {snapshot.status === "WAITING" && (
+        <div className="match-lobby">
+          <span>{snapshot.playerCount}/{snapshot.capacity} players seated · minimum 2 required</span>
+          {localIsHost ? (
+            <>
+              <strong>{autoStartIn !== undefined
+                ? `Full pit · starting in ${autoStartIn}s`
+                : canStart ? "You control when the match begins." : "Waiting for at least 2 players."}</strong>
+              {onStart && <button disabled={!canStart || starting || autoStartIn !== undefined} onClick={() => void onStart()} type="button">
+                {starting ? "Starting match…" : autoStartIn !== undefined ? `Starting in ${autoStartIn}s` : "Start match"}
+              </button>}
+            </>
+          ) : (
+            <strong>{autoStartIn !== undefined ? `Full pit · host start in ${autoStartIn}s` : `Host ${shortKey(snapshot.host)} starts the match.`}</strong>
+          )}
+        </div>
+      )}
       {snapshot.winner && (
         <div className="match-result" role="status">
           <span>Result revealed · winner {shortKey(snapshot.winner)}</span>

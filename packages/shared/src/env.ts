@@ -22,6 +22,7 @@ const serverEnvSchema = publicEnvSchema.extend({
   LIVEKIT_URL: optionalUrl,
   LIVEKIT_API_KEY: optionalString,
   LIVEKIT_API_SECRET: optionalString,
+  GROQ_API_KEY: optionalString,
   ASSEMBLYAI_API_KEY: optionalString,
   OUTCRY_PROGRAM_ID: optionalString,
   OUTCRY_MATCH_ADDRESS: optionalString,

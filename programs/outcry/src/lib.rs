@@ -6,7 +6,7 @@ use ephemeral_rollups_sdk::{
         structs::{EphemeralMembersArgs, EphemeralPermission, Member, PERMISSION_SEED, TX_BALANCES_FLAG, TX_LOGS_FLAG, TX_MESSAGE_FLAG},
     },
     anchor::{commit, delegate, ephemeral},
-    consts::{EPHEMERAL_VAULT_ID, MAGIC_PROGRAM_ID, PERMISSION_PROGRAM_ID},
+    consts::{DELEGATION_PROGRAM_ID, EPHEMERAL_VAULT_ID, MAGIC_PROGRAM_ID, PERMISSION_PROGRAM_ID},
     cpi::DelegateConfig,
     ephem::MagicIntentBundleBuilder,
 };
@@ -21,10 +21,11 @@ declare_id!("D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt");
 
 pub const MAX_PLAYERS: usize = 4;
 pub const MAX_ROUNDS: u8 = 8;
-pub const MIN_PLAYERS_TO_START: u8 = 3;
+pub const MIN_PLAYERS_TO_START: u8 = 2;
 pub const MATCH_WAITING: u8 = 0;
 pub const MATCH_STARTED: u8 = 1;
 pub const MATCH_FINISHED: u8 = 2;
+pub const ROUND_PREPARED: u8 = 2;
 pub const ROUND_OPEN: u8 = 0;
 pub const ROUND_RESOLVED: u8 = 1;
 pub const SIDE_BUY: u8 = game::BUY;
@@ -94,6 +95,60 @@ pub mod outcry {
         Ok(())
     }
 
+    pub fn release_active_match(ctx: Context<ReleaseActiveMatch>) -> Result<()> {
+        let pit = &mut ctx.accounts.pit;
+        let match_info = ctx.accounts.match_state.to_account_info();
+        require_keys_eq!(pit.active_match, match_info.key(), ErrorCode::ActiveMatchMismatch);
+        require!(
+            *match_info.owner == crate::ID || *match_info.owner == DELEGATION_PROGRAM_ID,
+            ErrorCode::InvalidMatchAccount
+        );
+
+        // Cleanup is controlled by the pit authority above. A legacy/delegated match can
+        // retain a different match authority, so it must not reuse the start-match host check.
+        let (stored_pit, match_nonce, status, current_round, result) = {
+            let data = match_info.try_borrow_data()?;
+            require!(
+                data.len() == Match::SPACE || data.len() == Match::SPACE - 1,
+                ErrorCode::InvalidMatchAccount
+            );
+            require!(&data[..8] == Match::DISCRIMINATOR, ErrorCode::InvalidMatchAccount);
+
+            let stored_pit = Pubkey::new_from_array(
+                data[40..72]
+                    .try_into()
+                    .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
+            );
+            let match_nonce = u64::from_le_bytes(
+                data[72..80]
+                    .try_into()
+                    .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
+            );
+            let current_round = if data.len() == Match::SPACE { data[83] } else { 0 };
+            let result_offset = if data.len() == Match::SPACE { 340 } else { 339 };
+            let result = Pubkey::new_from_array(
+                data[result_offset..result_offset + 32]
+                    .try_into()
+                    .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
+            );
+            (stored_pit, match_nonce, data[80], current_round, result)
+        };
+
+        require_keys_eq!(stored_pit, pit.key(), ErrorCode::InvalidMatchAccount);
+        let (expected_match, _) = Pubkey::find_program_address(
+            &[b"match", pit.key().as_ref(), &match_nonce.to_le_bytes()],
+            &crate::ID,
+        );
+        require_keys_eq!(expected_match, match_info.key(), ErrorCode::InvalidMatchAccount);
+        require!(
+            match_can_be_released(status, current_round, result),
+            ErrorCode::MatchNotReleasable
+        );
+
+        pit.active_match = Pubkey::default();
+        Ok(())
+    }
+
     pub fn join_match(ctx: Context<JoinMatch>, seat_index: u8) -> Result<()> {
         ctx.accounts
             .match_state
@@ -101,7 +156,101 @@ pub mod outcry {
     }
 
     pub fn start_match(ctx: Context<StartMatch>) -> Result<()> {
-        ctx.accounts.match_state.start()
+        ctx.accounts.match_state.start(ctx.accounts.authority.key())
+    }
+
+    pub fn prepare_rfq_round(ctx: Context<PrepareRfqRound>) -> Result<()> {
+        let match_state = &ctx.accounts.match_state;
+        require!(match_state.status == MATCH_STARTED, ErrorCode::MatchNotStarted);
+        require!(match_state.player_count > 0, ErrorCode::NotEnoughPlayers);
+
+        let round = &mut ctx.accounts.round;
+        round.match_key = match_state.key();
+        round.round = match_state.current_round;
+        round.taker = match_state.players[match_state.current_round as usize % match_state.player_count as usize];
+        round.side = SIDE_BUY;
+        round.quantity_lots = 0;
+        round.opened_at = 0;
+        round.deadline = 0;
+        round.quote_count = 0;
+        round.status = ROUND_PREPARED;
+        round.oracle = Pubkey::default();
+        round.oracle_price_e6 = 0;
+        round.winning_dealer = Pubkey::default();
+        round.clearing_price = 0;
+        round.bump = ctx.bumps.round;
+        Ok(())
+    }
+
+    pub fn migrate_legacy_match(ctx: Context<MigrateLegacyMatch>) -> Result<()> {
+        let match_info = ctx.accounts.match_state.to_account_info();
+        require_keys_eq!(*match_info.owner, crate::ID, ErrorCode::InvalidMatchAccount);
+
+        let legacy_data = match_info.try_borrow_data()?.to_vec();
+        require!(
+            legacy_data.len() == Match::SPACE - 1,
+            ErrorCode::InvalidMatchAccount
+        );
+        require!(
+            &legacy_data[..8] == Match::DISCRIMINATOR,
+            ErrorCode::InvalidMatchAccount
+        );
+
+        let stored_authority = Pubkey::new_from_array(
+            legacy_data[8..40]
+                .try_into()
+                .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
+        );
+        let first_player = Pubkey::new_from_array(
+            legacy_data[83..115]
+                .try_into()
+                .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
+        );
+        let host = legacy_host_for_migration(
+            stored_authority,
+            first_player,
+            ctx.accounts.authority.key(),
+        )?;
+
+        let pit = Pubkey::new_from_array(
+            legacy_data[40..72]
+                .try_into()
+                .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
+        );
+        let match_nonce = u64::from_le_bytes(
+            legacy_data[72..80]
+                .try_into()
+                .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
+        );
+        let (expected_match, _) = Pubkey::find_program_address(
+            &[b"match", pit.as_ref(), &match_nonce.to_le_bytes()],
+            &crate::ID,
+        );
+        require_keys_eq!(expected_match, match_info.key(), ErrorCode::InvalidMatchAccount);
+
+        let required_lamports = Rent::get()?.minimum_balance(Match::SPACE);
+        let current_lamports = match_info.lamports();
+        if current_lamports < required_lamports {
+            transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.key(),
+                    Transfer {
+                        from: ctx.accounts.authority.to_account_info(),
+                        to: match_info.clone(),
+                    },
+                ),
+                required_lamports.saturating_sub(current_lamports),
+            )?;
+        }
+
+        match_info.resize(Match::SPACE)?;
+        let mut data = match_info.try_borrow_mut_data()?;
+        for index in (83..legacy_data.len()).rev() {
+            data[index + 1] = legacy_data[index];
+        }
+        data[83] = 0;
+        data[8..40].copy_from_slice(host.as_ref());
+        Ok(())
     }
 
     pub fn authorize_session(
@@ -150,12 +299,90 @@ pub mod outcry {
         Ok(())
     }
 
+    pub fn initialize_oracle_unpriced(
+        ctx: Context<InitializeOracleUnpriced>,
+        feed_id: [u8; 32],
+    ) -> Result<()> {
+        require!(feed_id == MAGICBLOCK_PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
+        let oracle = &mut ctx.accounts.oracle;
+        oracle.authority = ctx.accounts.authority.key();
+        oracle.feed_id = feed_id;
+        oracle.price_e6 = 0;
+        oracle.published_at = 0;
+        oracle.bump = ctx.bumps.oracle;
+        Ok(())
+    }
+
     pub fn update_oracle(ctx: Context<UpdateOracle>) -> Result<()> {
         let clock = Clock::get()?;
         let (price_e6, published_at) = read_pyth_price(&ctx.accounts.price_update, &clock)?;
         require!(ctx.accounts.oracle.feed_id == MAGICBLOCK_PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
         ctx.accounts.oracle.price_e6 = price_e6;
         ctx.accounts.oracle.published_at = published_at;
+        Ok(())
+    }
+
+    pub fn delegate_match(
+        ctx: Context<DelegateMatch>,
+        pit: Pubkey,
+        match_nonce: u64,
+    ) -> Result<()> {
+        let match_state = {
+            let match_data = ctx.accounts.match_state.try_borrow_data()?;
+            Match::try_deserialize(&mut &match_data[..])?
+        };
+        require_keys_eq!(match_state.players[0], ctx.accounts.authority.key(), ErrorCode::NotMatchHost);
+        require_keys_eq!(match_state.pit, pit, ErrorCode::InvalidMatchAccount);
+        if ctx.accounts.match_state.to_account_info().owner != &ephemeral_rollups_sdk::id() {
+            ctx.accounts.delegate_match_state(
+                &ctx.accounts.authority,
+                &[b"match", pit.as_ref(), &match_nonce.to_le_bytes()],
+                DelegateConfig {
+                    validator: ctx.accounts.validator.as_ref().map(|value| value.key()),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn delegate_round(ctx: Context<DelegateRound>, match_key: Pubkey, round: u8) -> Result<()> {
+        let round_state = {
+            let round_data = ctx.accounts.round_state.try_borrow_data()?;
+            RfqRound::try_deserialize(&mut &round_data[..])?
+        };
+        require_keys_eq!(round_state.match_key, match_key, ErrorCode::InvalidMatchAccount);
+        require_keys_eq!(round_state.taker, ctx.accounts.authority.key(), ErrorCode::NotCurrentTaker);
+        if ctx.accounts.round_state.to_account_info().owner != &ephemeral_rollups_sdk::id() {
+            ctx.accounts.delegate_round_state(
+                &ctx.accounts.authority,
+                &[b"round", match_key.as_ref(), &[round]],
+                DelegateConfig {
+                    validator: ctx.accounts.validator.as_ref().map(|value| value.key()),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn delegate_oracle(ctx: Context<DelegateOracle>, feed_id: [u8; 32]) -> Result<()> {
+        require!(feed_id == MAGICBLOCK_PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
+        let oracle = {
+            let oracle_data = ctx.accounts.oracle.try_borrow_data()?;
+            OraclePrice::try_deserialize(&mut &oracle_data[..])?
+        };
+        require_keys_eq!(oracle.authority, ctx.accounts.authority.key(), ErrorCode::PrivateAuthorityMismatch);
+        if ctx.accounts.oracle.to_account_info().owner != &ephemeral_rollups_sdk::id() {
+            ctx.accounts.delegate_oracle(
+                &ctx.accounts.authority,
+                &[b"oracle", feed_id.as_ref()],
+                DelegateConfig {
+                    validator: ctx.accounts.validator.as_ref().map(|value| value.key()),
+                    ..Default::default()
+                },
+            )?;
+        }
         Ok(())
     }
 
@@ -168,6 +395,7 @@ pub mod outcry {
         let now = Clock::get()?.unix_timestamp;
         let match_key = ctx.accounts.match_state.key();
         let oracle_key = ctx.accounts.oracle.key();
+        let round_bump = ctx.accounts.round.bump;
         open_rfq_state(
             &mut ctx.accounts.match_state,
             &mut ctx.accounts.round,
@@ -179,7 +407,7 @@ pub mod outcry {
             quantity_lots,
             quote_window_seconds,
             now,
-            ctx.bumps.round,
+            round_bump,
         )
     }
 
@@ -200,6 +428,7 @@ pub mod outcry {
         )?;
         let match_key = ctx.accounts.match_state.key();
         let oracle_key = ctx.accounts.oracle.key();
+        let round_bump = ctx.accounts.round.bump;
         open_rfq_state(
             &mut ctx.accounts.match_state,
             &mut ctx.accounts.round,
@@ -211,8 +440,24 @@ pub mod outcry {
             quantity_lots,
             quote_window_seconds,
             now,
-            ctx.bumps.round,
+            round_bump,
         )
+    }
+
+    pub fn commit_rfq_state(ctx: Context<CommitRfqState>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
+        .commit(&[
+            ctx.accounts.match_state.to_account_info(),
+            ctx.accounts.round.to_account_info(),
+            ctx.accounts.oracle.to_account_info(),
+        ])
+        .build_and_invoke()?;
+        Ok(())
     }
 
     pub fn submit_quote(ctx: Context<SubmitQuote>, price_e6: i64) -> Result<()> {
@@ -440,7 +685,16 @@ pub mod outcry {
     }
 
     pub fn initialize_private_inventory(ctx: Context<InitializePrivateInventory>) -> Result<()> {
-        require!(ctx.accounts.match_state.players.contains(&ctx.accounts.authority.key()), ErrorCode::NotAMatchPlayer);
+        let match_info = ctx.accounts.match_state.to_account_info();
+        require!(
+            *match_info.owner == crate::ID || *match_info.owner == DELEGATION_PROGRAM_ID,
+            ErrorCode::InvalidMatchAccount
+        );
+        let match_state = {
+            let match_data = match_info.try_borrow_data()?;
+            Match::try_deserialize(&mut &match_data[..])?
+        };
+        require!(match_state.players.contains(&ctx.accounts.authority.key()), ErrorCode::NotAMatchPlayer);
         prefund_ephemeral_permission(
             ctx.accounts.system_program.key(),
             ctx.accounts.authority.to_account_info(),
@@ -753,6 +1007,10 @@ fn open_rfq_state(
 ) -> Result<()> {
     require!(match_state.status == MATCH_STARTED, ErrorCode::MatchNotStarted);
     require!(match_state.current_round < MAX_ROUNDS, ErrorCode::MatchFinished);
+    require!(
+        round.status == ROUND_PREPARED || (round.status == ROUND_OPEN && round.quantity_lots == 0),
+        ErrorCode::RoundNotOpen
+    );
     require!(quote_window_seconds > 0 && quote_window_seconds <= 30, ErrorCode::InvalidQuoteWindow);
     map_game_result(game::validate_side(side))?;
     map_game_result(game::validate_quantity(quantity_lots))?;
@@ -793,6 +1051,7 @@ fn submit_quote_state(
     now: i64,
 ) -> Result<()> {
     require!(round.status == ROUND_OPEN, ErrorCode::RoundNotOpen);
+    map_game_result(game::validate_quantity(round.quantity_lots))?;
     require!(now <= round.deadline, ErrorCode::QuoteDeadlinePassed);
     require_keys_eq!(oracle_key, round.oracle, ErrorCode::OracleMismatch);
     require!(quote.match_key == round.match_key, ErrorCode::InvalidQuoteAccount);
@@ -829,6 +1088,7 @@ fn resolve_round_state<'info>(
     now: i64,
 ) -> Result<()> {
     require!(round.status == ROUND_OPEN, ErrorCode::RoundNotOpen);
+    map_game_result(game::validate_quantity(round.quantity_lots))?;
     require!(now >= round.deadline || round.quote_count >= match_state.player_count.saturating_sub(1), ErrorCode::DeadlineNotReached);
     require_keys_eq!(oracle_key, round.oracle, ErrorCode::OracleMismatch);
     map_game_result(game::validate_oracle(
@@ -855,7 +1115,7 @@ fn resolve_round_state<'info>(
         candidates.push(game::QuoteCandidate { dealer: quote.authority, price_e6: quote.price_e6 });
     }
     require!(candidates.len() == round.quote_count as usize, ErrorCode::QuoteCountMismatch);
-    require!(candidates.len() >= (MIN_PLAYERS_TO_START - 1) as usize, ErrorCode::NotEnoughQuotes);
+    require!(candidates.len() >= match_state.player_count.saturating_sub(1) as usize, ErrorCode::NotEnoughQuotes);
     let winner = map_game_result(game::select_winner(round.side, &candidates))?;
 
     require_keys_eq!(taker_inventory.match_key, round.match_key, ErrorCode::InventoryMismatch);
@@ -981,6 +1241,15 @@ pub struct CreateMatch<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ReleaseActiveMatch<'info> {
+    #[account(mut, has_one = authority)]
+    pub pit: Account<'info, PitConfig>,
+    /// CHECK: handler validates ownership, discriminator, PDA, and pit authority.
+    pub match_state: UncheckedAccount<'info>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct JoinMatch<'info> {
     #[account(mut)]
     pub match_state: Account<'info, Match>,
@@ -989,9 +1258,35 @@ pub struct JoinMatch<'info> {
 
 #[derive(Accounts)]
 pub struct StartMatch<'info> {
-    #[account(mut, has_one = authority)]
+    #[account(mut, constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
     pub match_state: Account<'info, Match>,
     pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct PrepareRfqRound<'info> {
+    pub match_state: Account<'info, Match>,
+    #[account(
+        init,
+        payer = taker,
+        space = RfqRound::SPACE,
+        seeds = [b"round", match_state.key().as_ref(), &[match_state.current_round]],
+        bump,
+    )]
+    pub round: Account<'info, RfqRound>,
+    #[account(mut)]
+    pub taker: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateLegacyMatch<'info> {
+    /// CHECK: migration validates ownership, discriminator, PDA, and host authority before changing bytes.
+    #[account(mut)]
+    pub match_state: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -1043,8 +1338,24 @@ pub struct InitializeOracle<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(feed_id: [u8; 32])]
+pub struct InitializeOracleUnpriced<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = OraclePrice::SPACE,
+        seeds = [b"oracle", feed_id.as_ref()],
+        bump,
+    )]
+    pub oracle: Account<'info, OraclePrice>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct UpdateOracle<'info> {
-    #[account(mut, has_one = authority)]
+    #[account(mut)]
     pub oracle: Account<'info, OraclePrice>,
     /// CHECK: owner, Pyth verification level, feed identity, and freshness are checked by read_pyth_price.
     pub price_update: UncheckedAccount<'info>,
@@ -1056,17 +1367,13 @@ pub struct OpenRfq<'info> {
     #[account(mut)]
     pub match_state: Account<'info, Match>,
     #[account(
-        init,
-        payer = taker,
-        space = RfqRound::SPACE,
+        mut,
         seeds = [b"round", match_state.key().as_ref(), &[match_state.current_round]],
-        bump,
+        bump = round.bump,
     )]
     pub round: Account<'info, RfqRound>,
     pub oracle: Account<'info, OraclePrice>,
-    #[account(mut)]
     pub taker: Signer<'info>,
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -1074,11 +1381,9 @@ pub struct OpenRfqSession<'info> {
     #[account(mut)]
     pub match_state: Account<'info, Match>,
     #[account(
-        init,
-        payer = payer,
-        space = RfqRound::SPACE,
+        mut,
         seeds = [b"round", match_state.key().as_ref(), &[match_state.current_round]],
-        bump,
+        bump = round.bump,
     )]
     pub round: Account<'info, RfqRound>,
     pub oracle: Account<'info, OraclePrice>,
@@ -1092,7 +1397,6 @@ pub struct OpenRfqSession<'info> {
     pub session_grant: Account<'info, SessionGrant>,
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -1295,10 +1599,62 @@ pub struct InitializePrivateInventory<'info> {
         bump,
     )]
     pub inventory: Account<'info, PrivateInventory>,
-    pub match_state: Account<'info, Match>,
+    /// CHECK: The handler validates the canonical Match account owner and data.
+    pub match_state: UncheckedAccount<'info>,
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(pit: Pubkey, match_nonce: u64)]
+pub struct DelegateMatch<'info> {
+    pub authority: Signer<'info>,
+    /// CHECK: The match PDA is constrained by its canonical seeds.
+    #[account(
+        mut,
+        del,
+        seeds = [b"match", pit.as_ref(), &match_nonce.to_le_bytes()],
+        bump,
+    )]
+    pub match_state: UncheckedAccount<'info>,
+    /// CHECK: Checked by the delegation program.
+    pub validator: Option<UncheckedAccount<'info>>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(match_key: Pubkey, round: u8)]
+pub struct DelegateRound<'info> {
+    pub authority: Signer<'info>,
+    /// CHECK: The round PDA is constrained by its canonical seeds.
+    #[account(
+        mut,
+        del,
+        seeds = [b"round", match_key.as_ref(), &[round]],
+        bump,
+    )]
+    pub round_state: UncheckedAccount<'info>,
+    /// CHECK: Checked by the delegation program.
+    pub validator: Option<UncheckedAccount<'info>>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(feed_id: [u8; 32])]
+pub struct DelegateOracle<'info> {
+    pub authority: Signer<'info>,
+    /// CHECK: The oracle PDA is constrained by its canonical seeds.
+    #[account(
+        mut,
+        del,
+        seeds = [b"oracle", feed_id.as_ref()],
+        bump,
+    )]
+    pub oracle: UncheckedAccount<'info>,
+    /// CHECK: Checked by the delegation program.
+    pub validator: Option<UncheckedAccount<'info>>,
 }
 
 #[delegate]
@@ -1393,6 +1749,30 @@ pub struct PrivateInventoryPermission<'info> {
     /// CHECK: Fixed MagicBlock program.
     #[account(address = MAGIC_PROGRAM_ID)]
     pub magic_program: UncheckedAccount<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct CommitRfqState<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub match_state: Account<'info, Match>,
+    #[account(
+        mut,
+        seeds = [b"round", match_state.key().as_ref(), &[round.round]],
+        bump = round.bump,
+    )]
+    pub round: Account<'info, RfqRound>,
+    #[account(
+        mut,
+        seeds = [b"oracle", oracle.feed_id.as_ref()],
+        bump = oracle.bump,
+    )]
+    pub oracle: Account<'info, OraclePrice>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
 }
 
 #[commit]
@@ -1519,12 +1899,29 @@ impl Match {
         Ok(())
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, host: Pubkey) -> Result<()> {
+        require_keys_eq!(self.players[0], host, ErrorCode::NotMatchHost);
         require!(self.status == MATCH_WAITING, ErrorCode::MatchAlreadyStarted);
         require!(self.player_count >= MIN_PLAYERS_TO_START, ErrorCode::NotEnoughPlayers);
         self.status = MATCH_STARTED;
         Ok(())
     }
+}
+
+fn legacy_host_for_migration(
+    stored_authority: Pubkey,
+    first_player: Pubkey,
+    caller: Pubkey,
+) -> Result<Pubkey> {
+    require!(stored_authority == caller || first_player == caller, ErrorCode::NotMatchHost);
+    Ok(if first_player == Pubkey::default() { stored_authority } else { first_player })
+}
+
+fn match_can_be_released(status: u8, current_round: u8, result: Pubkey) -> bool {
+    status == MATCH_FINISHED
+        || ((status == MATCH_WAITING || status == MATCH_STARTED)
+            && current_round == 0
+            && result == Pubkey::default())
 }
 
 #[account]
@@ -1620,7 +2017,7 @@ pub enum ErrorCode {
     DuplicatePlayer,
     #[msg("seat is already occupied")]
     SeatOccupied,
-    #[msg("at least three players are required to start")]
+    #[msg("at least two players are required to trade")]
     NotEnoughPlayers,
     #[msg("match has already started")]
     MatchAlreadyStarted,
@@ -1704,6 +2101,14 @@ pub enum ErrorCode {
     InvalidSessionDuration,
     #[msg("session action mask contains an unauthorized action")]
     InvalidSessionActionMask,
+    #[msg("only the first joined player can start the match")]
+    NotMatchHost,
+    #[msg("match account is invalid or uses an unsupported layout")]
+    InvalidMatchAccount,
+    #[msg("the supplied match is not the pit's active match")]
+    ActiveMatchMismatch,
+    #[msg("the active match has progressed and cannot be released")]
+    MatchNotReleasable,
 }
 
 #[cfg(test)]
@@ -1763,15 +2168,37 @@ mod tests {
     }
 
     #[test]
-    fn start_requires_quorum_and_is_once_only() {
+    fn only_finished_or_pre_round_matches_can_be_released() {
+        assert!(match_can_be_released(MATCH_WAITING, 0, Pubkey::default()));
+        assert!(match_can_be_released(MATCH_STARTED, 0, Pubkey::default()));
+        assert!(match_can_be_released(MATCH_FINISHED, 7, Pubkey::new_unique()));
+        assert!(!match_can_be_released(MATCH_STARTED, 1, Pubkey::default()));
+        assert!(!match_can_be_released(MATCH_STARTED, 0, Pubkey::new_unique()));
+    }
+
+    #[test]
+    fn start_allows_two_players_and_is_once_only() {
         let mut match_state = empty_match(MAX_PLAYERS as u8);
-        assert!(match_state.join(Pubkey::new_unique(), 0).is_ok());
+        let host = Pubkey::new_unique();
+        assert!(match_state.join(host, 0).is_ok());
         assert!(match_state.join(Pubkey::new_unique(), 1).is_ok());
-        assert!(match_state.start().is_err());
-        assert!(match_state.join(Pubkey::new_unique(), 2).is_ok());
-        assert!(match_state.start().is_ok());
-        assert!(match_state.start().is_err());
+        assert!(match_state.start(Pubkey::new_unique()).is_err());
+        assert!(match_state.start(host).is_ok());
+        assert!(match_state.start(host).is_err());
         assert_eq!(match_state.status, MATCH_STARTED);
+    }
+
+    #[test]
+    fn legacy_migration_promotes_first_joined_player() {
+        let stored_authority = Pubkey::new_unique();
+        let first_player = Pubkey::new_unique();
+        let second_player = Pubkey::new_unique();
+
+        assert_eq!(
+            legacy_host_for_migration(stored_authority, first_player, first_player).unwrap(),
+            first_player
+        );
+        assert!(legacy_host_for_migration(stored_authority, first_player, second_player).is_err());
     }
 
     #[test]

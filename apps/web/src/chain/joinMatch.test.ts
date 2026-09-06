@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { Keypair } from "@solana/web3.js";
+import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { readFile } from "node:fs/promises";
 import {
   createCreateMatchInstruction,
   createInitializePitInstruction,
   createJoinMatchInstruction,
+  createReleaseActiveMatchInstruction,
   matchBootstrapAddresses,
   validateJoinAccounts,
   validateWalletBalance,
@@ -40,6 +42,7 @@ assert.throws(() => validateJoinAccounts(null, null, programId), /outcry_program
 assert.throws(() => validateJoinAccounts({ executable: true }, null, programId), /match_account_not_initialized/);
 assert.throws(() => validateJoinAccounts({ executable: true }, { owner: player }, programId), /match_account_program_mismatch/);
 validateJoinAccounts({ executable: true }, { owner: programId }, programId);
+validateJoinAccounts({ executable: true }, { owner: DELEGATION_PROGRAM_ID }, programId);
 assert.throws(() => validateWalletBalance(0), /wallet_fee_payer_unfunded/);
 assert.throws(() => validateWalletBalance(4_999), /wallet_fee_payer_unfunded/);
 validateWalletBalance(5_000);
@@ -64,6 +67,17 @@ assert.equal(initializePit.keys[0]?.pubkey.toBase58(), bootstrap.pit.toBase58())
 assert.equal(initializePit.keys[1]?.isSigner, true);
 assert.equal(createMatch.keys[1]?.pubkey.toBase58(), bootstrap.match.toBase58());
 assert.equal(createMatch.keys[2]?.isSigner, true);
+const release = createReleaseActiveMatchInstruction({
+  pitAddress: bootstrap.pit.toBase58(),
+  matchAddress: bootstrap.match.toBase58(),
+  authorityAddress: player.toBase58(),
+  programId: programId.toBase58(),
+});
+assert.equal(release.keys[0]?.pubkey.toBase58(), bootstrap.pit.toBase58());
+assert.equal(release.keys[0]?.isWritable, true);
+assert.equal(release.keys[1]?.pubkey.toBase58(), bootstrap.match.toBase58());
+assert.equal(release.keys[2]?.pubkey.toBase58(), player.toBase58());
+assert.equal(release.keys[2]?.isSigner, true);
 assert.throws(() => createInitializePitInstruction({
   pitAddress: bootstrap.pit.toBase58(), authorityAddress: player.toBase58(), pitId: "wall-street-01", capacity: 5, programId: programId.toBase58(),
 }), /invalid_pit_capacity/);
