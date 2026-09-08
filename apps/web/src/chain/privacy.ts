@@ -73,6 +73,26 @@ export type PrivateInventoryWallet = {
   signAndSendTransaction?: (transaction: Transaction) => Promise<string | { signature: string }>;
 };
 
+export type PrivateQuoteSetupInput = {
+  baseRpcUrl: string;
+  teeRpcUrl: string;
+  matchAddress: PublicKey;
+  dealer: PublicKey;
+  round: number;
+  wallet: PrivateInventoryWallet;
+  programId?: PublicKey;
+  teeValidator?: PublicKey;
+};
+
+type PreparedPrivateQuote = {
+  connection: Connection;
+  feePayer: Keypair;
+  expiresAt: number;
+};
+
+const PRIVATE_QUOTE_AUTH_MIN_VALIDITY_MS = 5_000;
+const preparedPrivateQuotes = new Map<string, PreparedPrivateQuote>();
+
 export function privateQuotePda(input: {
   matchAddress: PublicKey;
   round: number;
@@ -396,16 +416,17 @@ export function createInitPrivateQuotePermissionInstruction(input: {
   });
 }
 
-export async function ensurePrivateQuote(input: {
-  baseRpcUrl: string;
-  teeRpcUrl: string;
-  matchAddress: PublicKey;
-  dealer: PublicKey;
-  round: number;
-  wallet: PrivateInventoryWallet;
-  programId?: PublicKey;
-  teeValidator?: PublicKey;
-}) {
+function privateQuotePreparationKey(input: Pick<PrivateQuoteSetupInput, "teeRpcUrl" | "matchAddress" | "dealer" | "round" | "programId">) {
+  return [
+    input.teeRpcUrl,
+    (input.programId ?? PROGRAM_ID).toBase58(),
+    input.matchAddress.toBase58(),
+    input.round,
+    input.dealer.toBase58(),
+  ].join(":");
+}
+
+export async function ensurePrivateQuote(input: PrivateQuoteSetupInput) {
   const programId = input.programId ?? PROGRAM_ID;
   if (!input.wallet.publicKey?.equals(input.dealer)) throw new Error("private_quote_wallet_mismatch");
   if (!input.wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
@@ -488,7 +509,31 @@ export async function ensurePrivateQuote(input: {
       signMessage: async (message) => signedMessage(input.wallet, message),
     });
   }
-  return { connection: session.connection, feePayer };
+  return { connection: session.connection, feePayer, expiresAt: session.expiresAt };
+}
+
+/**
+ * Performs the wallet-visible MagicBlock setup before an RFQ opens. The TEE
+ * bearer token is deliberately memory-only; a page reload requires setup to
+ * be revalidated rather than reusing credentials from browser storage.
+ */
+export async function preparePrivateQuote(input: PrivateQuoteSetupInput) {
+  const prepared = await ensurePrivateQuote(input);
+  if (prepared.expiresAt - Date.now() <= PRIVATE_QUOTE_AUTH_MIN_VALIDITY_MS) {
+    throw new Error("private_quote_auth_expiring");
+  }
+  preparedPrivateQuotes.set(privateQuotePreparationKey(input), prepared);
+  return prepared;
+}
+
+export function getPreparedPrivateQuote(input: Pick<PrivateQuoteSetupInput, "teeRpcUrl" | "matchAddress" | "dealer" | "round" | "programId">) {
+  const key = privateQuotePreparationKey(input);
+  const prepared = preparedPrivateQuotes.get(key);
+  if (!prepared || prepared.expiresAt - Date.now() <= PRIVATE_QUOTE_AUTH_MIN_VALIDITY_MS) {
+    preparedPrivateQuotes.delete(key);
+    throw new Error("private_quote_not_prepared");
+  }
+  return prepared;
 }
 
 export function createDelegatePrivateInventoryInstruction(input: {

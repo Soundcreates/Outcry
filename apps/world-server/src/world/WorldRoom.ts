@@ -18,6 +18,7 @@ const TICK_RATE_HZ = 20;
 const TICK_DT_MS = 1000 / TICK_RATE_HZ;
 const MAX_INPUTS_PER_TICK = 8;
 const MAX_PENDING_INPUTS = 32;
+const ACTIVE_MATCH_REFRESH_MS = 5_000;
 
 export class WorldRoom extends Room<{ state: WorldState }> {
   // ponytail: process-local presence count; use shared storage when the server is horizontally scaled.
@@ -43,6 +44,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private seating!: SeatLeaseManager;
   private membershipReader?: MatchMembershipReader;
   private activeMatchAddress = "";
+  private activeMatchReadAt = 0;
+  private activeMatchRefresh?: Promise<void>;
   private readonly pendingInputs = new Map<string, MovementInput[]>();
 
   async onCreate(options: { worldId?: string } = {}) {
@@ -192,6 +195,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.sendSeatResult(client, { accepted: false, reason: "player_not_walking" });
       return;
     }
+    await this.refreshActiveMatch();
     if (request.pitId === "wall-street-01" && !this.activeMatchAddress) {
       this.sendSeatResult(client, { accepted: false, reason: "chain_match_unavailable" });
       return;
@@ -205,6 +209,25 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     );
     if (result.accepted) this.seatPlayer(client.sessionId, player, result.seat);
     this.sendSeatResult(client, result);
+  }
+
+  private async refreshActiveMatch() {
+    if (!this.membershipReader || Date.now() - this.activeMatchReadAt < ACTIVE_MATCH_REFRESH_MS) return;
+    if (this.activeMatchRefresh) return this.activeMatchRefresh;
+
+    this.activeMatchRefresh = this.membershipReader.readActiveMatch("wall-street-01")
+      .then((matchAddress) => {
+        this.activeMatchReadAt = Date.now();
+        if (!matchAddress || matchAddress === this.activeMatchAddress) return;
+        this.activeMatchAddress = matchAddress;
+        const pit = this.state.pits.get("wall-street-01");
+        if (pit) pit.activeMatchId = matchAddress;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.activeMatchRefresh = undefined;
+      });
+    return this.activeMatchRefresh;
   }
 
   private async confirmSeat(client: Client, payload: unknown) {

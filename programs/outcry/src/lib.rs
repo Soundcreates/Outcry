@@ -28,6 +28,7 @@ pub const MATCH_FINISHED: u8 = 2;
 pub const ROUND_PREPARED: u8 = 2;
 pub const ROUND_OPEN: u8 = 0;
 pub const ROUND_RESOLVED: u8 = 1;
+pub const ROUND_SKIPPED: u8 = 3;
 pub const SIDE_BUY: u8 = game::BUY;
 pub const SIDE_SELL: u8 = game::SELL;
 pub const ORACLE_MAX_AGE_SECONDS: i64 = game::DEFAULT_ORACLE_MAX_AGE_SECONDS;
@@ -485,6 +486,11 @@ pub mod outcry {
         )
     }
 
+    pub fn skip_empty_round(ctx: Context<SkipEmptyRound>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        skip_empty_round_state(&ctx.accounts.match_state, &mut ctx.accounts.round, now)
+    }
+
     pub fn next_round(ctx: Context<NextRound>) -> Result<()> {
         next_round_state(&mut ctx.accounts.match_state, &ctx.accounts.round)
     }
@@ -866,7 +872,10 @@ pub mod outcry {
     }
 
     pub fn undelegate_round(ctx: Context<UndelegateRound>) -> Result<()> {
-        require!(ctx.accounts.round.status == ROUND_RESOLVED, ErrorCode::RoundNotResolved);
+        require!(
+            ctx.accounts.round.status == ROUND_RESOLVED || ctx.accounts.round.status == ROUND_SKIPPED,
+            ErrorCode::RoundNotResolved
+        );
         MagicIntentBundleBuilder::new(
             ctx.accounts.payer.to_account_info(),
             ctx.accounts.magic_context.to_account_info(),
@@ -1056,6 +1065,7 @@ fn resolve_round_state<'info>(
     require!(round.status == ROUND_OPEN, ErrorCode::RoundNotOpen);
     map_game_result(game::validate_quantity(round.quantity_lots))?;
     require!(now >= round.deadline || round.quote_count >= match_state.player_count.saturating_sub(1), ErrorCode::DeadlineNotReached);
+    require!(round.quote_count > 0, ErrorCode::NotEnoughQuotes);
 
     let mut candidates = Vec::with_capacity(remaining_accounts.len());
     let mut inventory_accounts = Vec::new();
@@ -1071,7 +1081,6 @@ fn resolve_round_state<'info>(
         let quote = Account::<PrivateQuote>::try_from(account_info).map_err(|_| error!(ErrorCode::InvalidQuoteAccount))?;
         require!(quote.match_key == round.match_key, ErrorCode::InvalidQuoteAccount);
         require!(quote.round == round.round, ErrorCode::InvalidQuoteAccount);
-        require!(quote.locked, ErrorCode::QuoteNotLocked);
         require!(quote.authority != round.taker, ErrorCode::DealerIsTaker);
         require!(match_state.players.contains(&quote.authority), ErrorCode::NotAMatchPlayer);
         let (expected_quote, _) = Pubkey::find_program_address(
@@ -1079,11 +1088,13 @@ fn resolve_round_state<'info>(
             &crate::ID,
         );
         require_keys_eq!(quote.key(), expected_quote, ErrorCode::InvalidQuoteAccount);
+        if !quote.locked {
+            continue;
+        }
         require!(!candidates.iter().any(|candidate: &game::QuoteCandidate| candidate.dealer == quote.authority), ErrorCode::InvalidQuoteAccount);
         candidates.push(game::QuoteCandidate { dealer: quote.authority, price_e6: quote.price_e6 });
     }
     require!(candidates.len() == round.quote_count as usize, ErrorCode::QuoteCountMismatch);
-    require!(candidates.len() >= match_state.player_count.saturating_sub(1) as usize, ErrorCode::NotEnoughQuotes);
     let winner = map_game_result(game::select_winner(round.side, &candidates))?;
 
     let (expected_winner_inventory, _) = Pubkey::find_program_address(
@@ -1140,8 +1151,26 @@ fn resolve_round_state<'info>(
     Ok(())
 }
 
+fn skip_empty_round_state(match_state: &Match, round: &mut RfqRound, now: i64) -> Result<()> {
+    require!(match_state.status == MATCH_STARTED, ErrorCode::MatchNotStarted);
+    require!(round.status == ROUND_OPEN, ErrorCode::RoundNotOpen);
+    require!(now >= round.deadline, ErrorCode::DeadlineNotReached);
+    require!(round.quote_count == 0, ErrorCode::EmptyRoundRequired);
+    round.status = ROUND_SKIPPED;
+    emit!(EmptyRoundSkipped {
+        match_key: round.match_key,
+        round: round.round,
+        host: match_state.authority,
+        deadline: round.deadline,
+    });
+    Ok(())
+}
+
 fn next_round_state(match_state: &mut Match, round: &RfqRound) -> Result<()> {
-    require!(round.status == ROUND_RESOLVED, ErrorCode::RoundNotResolved);
+    require!(
+        round.status == ROUND_RESOLVED || round.status == ROUND_SKIPPED,
+        ErrorCode::RoundNotResolved
+    );
     require!(match_state.status == MATCH_STARTED, ErrorCode::MatchFinished);
     if match_state.current_round + 1 >= MAX_ROUNDS {
         match_state.status = MATCH_FINISHED;
@@ -1456,6 +1485,19 @@ pub struct ResolveRoundSession<'info> {
         bump = session_grant.bump,
     )]
     pub session_grant: Account<'info, SessionGrant>,
+}
+
+#[derive(Accounts)]
+pub struct SkipEmptyRound<'info> {
+    #[account(has_one = authority)]
+    pub match_state: Account<'info, Match>,
+    #[account(
+        mut,
+        seeds = [b"round", match_state.key().as_ref(), &[round.round]],
+        bump = round.bump,
+    )]
+    pub round: Account<'info, RfqRound>,
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -1989,6 +2031,14 @@ impl RfqRound {
     pub const SPACE: usize = 8 + 32 + 1 + 32 + 1 + 8 + 8 + 8 + 1 + 1 + 32 + 8 + 32 + 8 + 1;
 }
 
+#[event]
+pub struct EmptyRoundSkipped {
+    pub match_key: Pubkey,
+    pub round: u8,
+    pub host: Pubkey,
+    pub deadline: i64,
+}
+
 #[account]
 pub struct PrivateQuote {
     pub match_key: Pubkey,
@@ -2079,6 +2129,8 @@ pub enum ErrorCode {
     QuoteNotLocked,
     #[msg("quote count does not match the supplied quote accounts")]
     QuoteCountMismatch,
+    #[msg("round has sealed quotes and cannot be skipped")]
+    EmptyRoundRequired,
     #[msg("not enough valid dealer quotes")]
     NotEnoughQuotes,
     #[msg("round deadline has not been reached")]
@@ -2155,6 +2207,25 @@ mod tests {
         }
     }
 
+    fn open_round(quote_count: u8, deadline: i64) -> RfqRound {
+        RfqRound {
+            match_key: Pubkey::new_unique(),
+            round: 0,
+            taker: Pubkey::new_unique(),
+            side: SIDE_BUY,
+            quantity_lots: 1,
+            opened_at: deadline - 30,
+            deadline,
+            quote_count,
+            status: ROUND_OPEN,
+            oracle: Pubkey::new_unique(),
+            oracle_price_e6: 100_000_000,
+            winning_dealer: Pubkey::default(),
+            clearing_price: 0,
+            bump: 0,
+        }
+    }
+
     #[test]
     fn match_and_result_pdas_are_deterministic_and_nonce_scoped() {
         let pit = Pubkey::new_unique();
@@ -2210,6 +2281,35 @@ mod tests {
         assert!(match_state.start(host).is_ok());
         assert!(match_state.start(host).is_err());
         assert_eq!(match_state.status, MATCH_STARTED);
+    }
+
+    #[test]
+    fn host_can_skip_only_an_empty_expired_open_round() {
+        let mut match_state = empty_match(2);
+        match_state.status = MATCH_STARTED;
+        let mut round = open_round(0, 100);
+
+        assert!(skip_empty_round_state(&match_state, &mut round, 99).is_err());
+        assert_eq!(round.status, ROUND_OPEN);
+        assert!(skip_empty_round_state(&match_state, &mut round, 100).is_ok());
+        assert_eq!(round.status, ROUND_SKIPPED);
+
+        let mut quoted_round = open_round(1, 100);
+        assert!(skip_empty_round_state(&match_state, &mut quoted_round, 100).is_err());
+        assert_eq!(quoted_round.status, ROUND_OPEN);
+    }
+
+    #[test]
+    fn skipped_round_advances_without_a_fill() {
+        let mut match_state = empty_match(2);
+        match_state.status = MATCH_STARTED;
+        let mut round = open_round(0, 100);
+        skip_empty_round_state(&match_state, &mut round, 100).unwrap();
+
+        next_round_state(&mut match_state, &round).unwrap();
+        assert_eq!(match_state.current_round, 1);
+        assert_eq!(round.winning_dealer, Pubkey::default());
+        assert_eq!(round.clearing_price, 0);
     }
 
     #[test]

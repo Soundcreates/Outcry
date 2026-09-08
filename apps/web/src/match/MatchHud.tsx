@@ -7,12 +7,16 @@ type Props = {
   error?: string;
   settling?: boolean;
   resolving?: boolean;
+  skipping?: boolean;
+  resumingSkipped?: boolean;
   starting?: boolean;
   autoStartIn?: number;
   onRetry?: () => void;
   onStart?: () => Promise<void>;
   onSettle?: () => Promise<void>;
   onResolve?: () => Promise<void>;
+  onSkip?: () => Promise<void>;
+  onResumeSkipped?: () => Promise<void>;
   onReturn?: () => void;
   onReleaseStaleMatch?: () => void;
   releasingStaleMatch?: boolean;
@@ -20,7 +24,7 @@ type Props = {
 
 const shortKey = (value?: string) => value ? `${value.slice(0, 4)}…${value.slice(-4)}` : "—";
 
-export default function MatchHud({ snapshot, walletAddress, error, settling, resolving, starting, autoStartIn, onRetry, onStart, onSettle, onResolve, onReturn, onReleaseStaleMatch, releasingStaleMatch }: Props) {
+export default function MatchHud({ snapshot, walletAddress, error, settling, resolving, skipping, resumingSkipped, starting, autoStartIn, onRetry, onStart, onSettle, onResolve, onSkip, onResumeSkipped, onReturn, onReleaseStaleMatch, releasingStaleMatch }: Props) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -44,7 +48,11 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
   const localIsTaker = Boolean(walletAddress && snapshot.taker === walletAddress);
   const localIsHost = Boolean(walletAddress && snapshot.host === walletAddress);
   const canStart = localIsHost && snapshot.status === "WAITING" && snapshot.playerCount >= 2;
-  const canResolve = localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount >= snapshot.dealerCount;
+  const liveRoundStateAvailable = snapshot.stateSource !== "tee-unavailable";
+  const quoteDeadlinePassed = remaining === 0;
+  const canResolve = liveRoundStateAvailable && snapshot.stateSource === "tee" && localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount > 0 && (snapshot.quoteCount >= snapshot.dealerCount || quoteDeadlinePassed);
+  const canSkipEmptyRound = liveRoundStateAvailable && snapshot.stateSource === "tee" && localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount === 0 && quoteDeadlinePassed;
+  const canResumeSkippedRound = liveRoundStateAvailable && snapshot.stateSource === "tee" && localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "SKIPPED" && snapshot.quoteCount === 0;
   const finalScores = snapshot.finalScoresE6?.slice(0, snapshot.playerCount) ?? [];
   const localIndex = walletAddress ? snapshot.players.indexOf(walletAddress) : -1;
   const localScore = localIndex >= 0 ? finalScores[localIndex] : undefined;
@@ -83,15 +91,31 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
       </div>}
       <div className="match-hud-grid">
         <div><span>Intent</span><strong>{snapshot.side ? `${snapshot.side} ${snapshot.quantityLots} SOL` : "Waiting"}</strong></div>
-        <div><span>Quotes sealed</span><strong>{snapshot.quoteCount}/{snapshot.dealerCount}</strong></div>
+        <div><span>Quotes sealed</span><strong>{liveRoundStateAvailable ? `${snapshot.quoteCount}/${snapshot.dealerCount}` : "Live TEE unavailable"}</strong></div>
         <div><span>Round clock</span><strong>{remaining === undefined ? "—" : `${remaining}s`}</strong></div>
         <div><span>Private inventory</span><strong>Only you · TEE sync</strong></div>
       </div>
       {canResolve && onResolve && (
         <div className="match-lobby">
-          <strong>All dealer quotes are sealed. Resolve the round to continue.</strong>
-          <button disabled={resolving} onClick={() => void onResolve()} type="button">
+          <strong>{snapshot.quoteCount >= snapshot.dealerCount ? "All dealer quotes are sealed. Resolve the round to continue." : "The quote deadline passed. Resolve the sealed quotes that arrived."}</strong>
+          <button disabled={resolving || skipping} onClick={() => void onResolve()} type="button">
             {resolving ? "Resolving round…" : "Resolve round"}
+          </button>
+        </div>
+      )}
+      {canSkipEmptyRound && onSkip && (
+        <div className="match-lobby">
+          <strong>No quotes were sealed before the deadline. Skip this round without a trade.</strong>
+          <button disabled={resolving || skipping || resumingSkipped} onClick={() => void onSkip()} type="button">
+            {skipping ? "Skipping empty round…" : "Skip empty round"}
+          </button>
+        </div>
+      )}
+      {canResumeSkippedRound && onResumeSkipped && (
+        <div className="match-lobby">
+          <strong>This empty round was already skipped. Finish cleanup to continue.</strong>
+          <button disabled={resolving || skipping || resumingSkipped} onClick={() => void onResumeSkipped()} type="button">
+            {resumingSkipped ? "Resuming skipped round…" : "Resume skipped round"}
           </button>
         </div>
       )}

@@ -18,6 +18,9 @@ export const ORACLE_FEED_ID_HEX = Array.from(ORACLE_FEED_ID, (byte) => byte.toSt
 export type PublicMatchSnapshot = {
   matchAddress: string;
   accountOwner?: string;
+  roundOwner?: string;
+  /** Base is durable state; TEE is authoritative while a match is delegated. */
+  stateSource?: "base" | "tee" | "tee-unavailable";
   authority: string;
   pit: string;
   matchNonce: bigint;
@@ -31,7 +34,8 @@ export type PublicMatchSnapshot = {
   taker?: string;
   side?: "BUY" | "SELL";
   quantityLots?: number;
-  roundStatus?: "OPEN" | "RESOLVED";
+  roundStatus?: "PREPARED" | "OPEN" | "RESOLVED" | "SKIPPED";
+  oraclePriceE6?: number;
   quoteCount: number;
   dealerCount: number;
   deadlineAt?: number;
@@ -125,7 +129,7 @@ function decodeRound(snapshot: PublicMatchSnapshot, data: Uint8Array) {
   const side = data[73];
   if (side !== 0 && side !== 1) throw new Error("round_side_invalid");
   const roundStatus = data[99];
-  if (roundStatus !== 0 && roundStatus !== 1 && roundStatus !== 2) throw new Error("round_status_invalid");
+  if (roundStatus !== 0 && roundStatus !== 1 && roundStatus !== 2 && roundStatus !== 3) throw new Error("round_status_invalid");
   const quantityLots = Number(readU64(data, 74));
   const taker = keyAt(data, 41);
   if (!snapshot.players.includes(taker.toBase58())) throw new Error("round_taker_invalid");
@@ -141,14 +145,18 @@ function decodeRound(snapshot: PublicMatchSnapshot, data: Uint8Array) {
       && isDefaultKey(data.slice(140, 172))
       && readI64(data, 172) === 0n;
     if (!isPrepared && !isLegacyPrepared) throw new Error("round_quantity_invalid");
+    snapshot.roundStatus = "PREPARED";
     return;
   }
   if (![1, 2, 5].includes(quantityLots) || roundStatus === 2) throw new Error("round_quantity_invalid");
   snapshot.side = side === 0 ? "BUY" : "SELL";
   snapshot.quantityLots = quantityLots;
-  snapshot.roundStatus = roundStatus === 0 ? "OPEN" : "RESOLVED";
+  snapshot.roundStatus = roundStatus === 0 ? "OPEN" : roundStatus === 1 ? "RESOLVED" : "SKIPPED";
   snapshot.quoteCount = Math.min(data[98], snapshot.dealerCount);
   snapshot.deadlineAt = Number(readI64(data, 90)) * 1000;
+  const oraclePriceE6 = Number(readI64(data, 132));
+  if (!Number.isSafeInteger(oraclePriceE6) || oraclePriceE6 <= 0) throw new Error("round_oracle_price_invalid");
+  snapshot.oraclePriceE6 = oraclePriceE6;
 }
 
 function decodeResult(snapshot: PublicMatchSnapshot, data: Uint8Array) {
@@ -195,7 +203,10 @@ export async function loadPublicMatchState(input: {
 
   if (snapshot.status === "STARTED") {
     const roundInfo = relatedAccounts[roundKey ? relatedKeys.indexOf(roundKey) : -1];
-    if (roundInfo && (roundInfo.owner.equals(programId) || roundInfo.owner.equals(DELEGATION_PROGRAM_ID))) decodeRound(snapshot, roundInfo.data);
+    if (roundInfo && (roundInfo.owner.equals(programId) || roundInfo.owner.equals(DELEGATION_PROGRAM_ID))) {
+      snapshot.roundOwner = roundInfo.owner.toBase58();
+      decodeRound(snapshot, roundInfo.data);
+    }
   }
 
   if (!isDefaultKey(resultKey.toBytes())) {
@@ -204,6 +215,41 @@ export async function loadPublicMatchState(input: {
     if (resultInfo && (resultInfo.owner.equals(programId) || resultInfo.owner.equals(DELEGATION_PROGRAM_ID))) decodeResult(snapshot, resultInfo.data);
   }
   return snapshot;
+}
+
+/** Reads durable ownership from Base, then live public Match/RfqRound state from TEE. */
+export async function loadRuntimeMatchState(input: {
+  rpcUrl: string;
+  matchAddress: string;
+  programId?: string;
+  baseConnection?: Connection;
+  teeConnection?: Connection;
+  timeoutMs?: number;
+}): Promise<PublicMatchSnapshot> {
+  const base = await loadPublicMatchState({
+    rpcUrl: input.rpcUrl,
+    matchAddress: input.matchAddress,
+    programId: input.programId,
+    connection: input.baseConnection,
+    timeoutMs: input.timeoutMs,
+  });
+  // RFQ execution delegates the Round account while Match remains on Base.
+  if (base.roundOwner !== DELEGATION_PROGRAM_ID.toBase58()) return { ...base, stateSource: "base" };
+  if (!input.teeConnection) return { ...base, stateSource: "tee-unavailable" };
+
+  try {
+    const tee = await loadPublicMatchState({
+      rpcUrl: input.rpcUrl,
+      matchAddress: input.matchAddress,
+      programId: input.programId,
+      connection: input.teeConnection,
+      timeoutMs: input.timeoutMs,
+    });
+    // Base ownership is the durable delegation signal; TEE supplies live values.
+    return { ...tee, accountOwner: base.accountOwner, stateSource: "tee" };
+  } catch {
+    return { ...base, stateSource: "tee-unavailable" };
+  }
 }
 
 export function oraclePda(programId = PROGRAM_ID) {

@@ -170,6 +170,7 @@ assert.match(privateQuotePanelSource, /private_quote_failed/);
 assert.match(privateQuotePanelSource, /Submit private quote/);
 assert.match(privateQuotePanelSource, /setStatus\("error"\)/);
 assert.match(privateQuotePanelSource, /onClick=\{\(\) => void submit\(\)\}/);
+assert.match(privateQuotePanelSource, /onQuoteSealed\?\.\(\)/);
 assert.doesNotMatch(privateQuotePanelSource, /new Connection|VITE_SOLANA_RPC|NEXT_PUBLIC_SOLANA_RPC/);
 assert.match(privateInventoryPanelSource, /unlockPrivateInventory/);
 assert.match(privateInventoryPanelSource, /browserBaseRpc/);
@@ -179,5 +180,8 @@ assert.match(privacySource, /ensureTeeFeePayer/);
 assert.match(privacySource, /waitForPrivateQuoteOnTee/);
 assert.match(privacySource, /permissionInfo\?\.lamports/);
 assert.match(privacySource, /feePayer: input\.feePayer/);
+assert.match(privacySource, /preparePrivateQuote/);
+assert.match(privacySource, /getPreparedPrivateQuote/);
+assert.match(privacySource, /PRIVATE_QUOTE_AUTH_MIN_VALIDITY_MS/);
 
 console.log("privacy boundary: 800 matrix assertions + Alice/Bob/spectator attack denials + TEE fail-closed/retry boundary pass");

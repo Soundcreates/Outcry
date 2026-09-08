@@ -6,6 +6,7 @@ assert.match(source, /void this\.interact\(client, payload\)/);
 assert.doesNotMatch(source, /activeMatchAddressReady/);
 assert.match(source, /chain_match_unavailable/);
 assert.match(source, /rpcUrl: env\.OUTCRY_BASE_RPC/);
+assert.match(source, /refreshActiveMatch/);
 assert.match(source, /if \(seatIndex === undefined\) return;/);
 assert.match(source, /canRebindReservedSeat/);
 

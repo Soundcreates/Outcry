@@ -17,6 +17,7 @@ assert.match(source, /pub fn initialize_escrow/);
 assert.match(source, /pub fn open_rfq_session/);
 assert.match(source, /pub fn submit_quote_session/);
 assert.match(source, /pub fn resolve_round_session/);
+assert.match(source, /pub fn skip_empty_round/);
 assert.match(source, /pub fn next_round_session/);
 assert.match(source, /pub fn settle_match/);
 assert.match(source, /seeds = \[b"match"/);
