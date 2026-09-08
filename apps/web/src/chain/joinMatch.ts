@@ -3,10 +3,13 @@ import {
   PublicKey,
   Transaction,
   TransactionInstruction,
+  VersionedTransaction,
 } from "@solana/web3.js";
-import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
+import { createBaseRpcConnection } from "./baseRpc";
+import { DELEGATION_PROGRAM_ID, MAGIC_CONTEXT_ID, MAGIC_PROGRAM_ID, magicFeeVaultPdaFromValidator } from "@magicblock-labs/ephemeral-rollups-sdk";
 import outcryIdl from "./idl/outcry.json";
 import { decodePublicMatchAccount } from "./matchState";
+import { createPrivateConnection, ensureTeeFeePayer, sendTeeTransaction, teeValidatorForRpc } from "./privacy";
 
 const joinMatchIdl = outcryIdl.instructions.find((instruction) => instruction.name === "join_match");
 if (!joinMatchIdl) throw new Error("outcry_idl_missing_join_match");
@@ -21,11 +24,15 @@ const CREATE_MATCH_DISCRIMINATOR = Uint8Array.from(createMatchIdl.discriminator)
 const releaseActiveMatchIdl = outcryIdl.instructions.find((instruction) => instruction.name === "release_active_match");
 if (!releaseActiveMatchIdl) throw new Error("outcry_idl_missing_release_active_match");
 const RELEASE_ACTIVE_MATCH_DISCRIMINATOR = Uint8Array.from(releaseActiveMatchIdl.discriminator);
+const undelegateMatchIdl = outcryIdl.instructions.find((instruction) => instruction.name === "undelegate_match");
+if (!undelegateMatchIdl) throw new Error("outcry_idl_missing_undelegate_match");
+const UNDELEGATE_MATCH_DISCRIMINATOR = Uint8Array.from(undelegateMatchIdl.discriminator);
 
 type WalletProvider = {
   publicKey: PublicKey | null;
   connect: () => Promise<{ publicKey: PublicKey }>;
-  signTransaction?: (transaction: Transaction) => Promise<Transaction>;
+  signTransaction?: <T extends Transaction | VersionedTransaction>(transaction: T) => Promise<T>;
+  signAllTransactions?: <T extends Transaction | VersionedTransaction>(transactions: T[]) => Promise<T[]>;
   signAndSendTransaction: (transaction: Transaction) => Promise<string | { signature: string }>;
   signMessage?: (message: Uint8Array) => Promise<Uint8Array | { signature: Uint8Array }>;
 };
@@ -38,6 +45,14 @@ declare global {
 
 export function connectedWalletAddress() {
   return window.solana?.publicKey?.toBase58();
+}
+
+export type MatchOwnership = "base" | "delegated";
+
+export function classifyMatchOwnership(owner: PublicKey, programId: PublicKey): MatchOwnership {
+  if (owner.equals(programId)) return "base";
+  if (owner.equals(DELEGATION_PROGRAM_ID)) return "delegated";
+  throw new Error("match_account_program_mismatch");
 }
 
 export function createJoinMatchInstruction(input: {
@@ -127,6 +142,7 @@ export function createReleaseActiveMatchInstruction(input: {
   matchAddress: string;
   authorityAddress: string;
   programId: string;
+  force?: boolean;
 }) {
   return new TransactionInstruction({
     programId: new PublicKey(input.programId),
@@ -135,35 +151,66 @@ export function createReleaseActiveMatchInstruction(input: {
       { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
       { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
     ],
-    data: Uint8Array.from(RELEASE_ACTIVE_MATCH_DISCRIMINATOR) as unknown as Buffer,
+    data: Uint8Array.from([...RELEASE_ACTIVE_MATCH_DISCRIMINATOR, input.force ? 1 : 0]) as unknown as Buffer,
+  });
+}
+
+export function createUndelegateMatchInstruction(input: {
+  matchAddress: string;
+  payer: PublicKey;
+  authorityAddress: string;
+  magicFeeVaultAddress: string;
+  programId: string;
+}) {
+  return new TransactionInstruction({
+    programId: new PublicKey(input.programId),
+    keys: [
+      { pubkey: input.payer, isWritable: true, isSigner: true },
+      { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
+      { pubkey: new PublicKey(input.magicFeeVaultAddress), isWritable: true, isSigner: false },
+      { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
+      { pubkey: MAGIC_PROGRAM_ID, isWritable: false, isSigner: false },
+      { pubkey: MAGIC_CONTEXT_ID, isWritable: true, isSigner: false },
+    ],
+    data: Uint8Array.from(UNDELEGATE_MATCH_DISCRIMINATOR) as unknown as Buffer,
   });
 }
 
 async function simulateUnsignedTransaction(connection: Connection, transaction: Transaction) {
-  const response = await fetch(connection.rpcEndpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "simulateTransaction",
-      params: [transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"), {
-        encoding: "base64",
-        commitment: "confirmed",
-        sigVerify: false,
-        replaceRecentBlockhash: true,
-      }],
-    }),
+  const request = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "simulateTransaction",
+    params: [transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"), {
+      encoding: "base64",
+      commitment: "confirmed",
+      sigVerify: false,
+      replaceRecentBlockhash: true,
+    }],
   });
-  if (!response.ok) throw new Error(`match_bootstrap_simulation_rpc_http_${response.status}`);
-  const payload = await response.json() as {
-    error?: { message?: string };
-    result?: { value?: { err: unknown; logs?: string[] } };
-  };
-  if (payload.error) throw new Error(`match_bootstrap_simulation_rpc_${payload.error.message ?? "failed"}`);
-  const value = payload.result?.value;
-  if (!value) throw new Error("match_bootstrap_simulation_rpc_malformed");
-  return value;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(connection.rpcEndpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: request,
+    });
+    if (response.status === 429 && attempt < 2) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delayMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 1_000 * (attempt + 1);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+    if (!response.ok) throw new Error(`match_bootstrap_simulation_rpc_http_${response.status}`);
+    const payload = await response.json() as {
+      error?: { message?: string };
+      result?: { value?: { err: unknown; logs?: string[] } };
+    };
+    if (payload.error) throw new Error(`match_bootstrap_simulation_rpc_${payload.error.message ?? "failed"}`);
+    const value = payload.result?.value;
+    if (!value) throw new Error("match_bootstrap_simulation_rpc_malformed");
+    return value;
+  }
+  throw new Error("match_bootstrap_simulation_rpc_http_429");
 }
 
 function simulationError(value: { err: unknown; logs?: string[] }) {
@@ -203,6 +250,15 @@ async function sendAndConfirmWalletTransaction(
   return signature;
 }
 
+async function waitForBaseProgramAccount(connection: Connection, address: PublicKey, programId: PublicKey) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const info = await connection.getAccountInfo(address, "confirmed");
+    if (info?.owner.equals(programId)) return;
+    if (attempt + 1 < 20) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error("match_undelegation_not_confirmed");
+}
+
 export async function bootstrapMatchOnchain(input: {
   pitId: string;
   nonce: bigint;
@@ -218,7 +274,7 @@ export async function bootstrapMatchOnchain(input: {
   const authority = new PublicKey(connected.publicKey);
   const programId = new PublicKey(input.programId);
   const { pit, match } = matchBootstrapAddresses(input);
-  const connection = new Connection(input.rpcUrl, "confirmed");
+  const connection = createBaseRpcConnection(input.rpcUrl);
   const [programInfo, pitInfo, matchInfo] = await Promise.all([
     connection.getAccountInfo(programId, "confirmed"),
     connection.getAccountInfo(pit, "confirmed"),
@@ -277,7 +333,7 @@ export async function readActivePitMatchOnchain(input: {
   rpcUrl: string;
   programId: string;
 }) {
-  const connection = new Connection(input.rpcUrl, "confirmed");
+  const connection = createBaseRpcConnection(input.rpcUrl);
   const { pit } = matchBootstrapAddresses({ pitId: input.pitId, nonce: 0n, programId: input.programId });
   const pitInfo = await connection.getAccountInfo(pit, "confirmed");
   if (!pitInfo) return undefined;
@@ -291,14 +347,17 @@ export async function releaseActiveMatchOnchain(input: {
   pitId: string;
   activeMatchAddress: string;
   rpcUrl: string;
+  teeRpcUrl?: string;
   programId: string;
   onWalletApprovalRequested?: () => void;
 }) {
   const wallet = window.solana;
   if (!wallet) throw new Error("solana_wallet_not_found");
+  if (!wallet.signTransaction || !wallet.signMessage) throw new Error("wallet_transaction_and_message_signing_required");
   const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
   const authority = new PublicKey(connected.publicKey);
-  const connection = new Connection(input.rpcUrl, "confirmed");
+  const programId = new PublicKey(input.programId);
+  const connection = createBaseRpcConnection(input.rpcUrl);
   const { pit } = matchBootstrapAddresses({ pitId: input.pitId, nonce: 0n, programId: input.programId });
   const pitInfo = await connection.getAccountInfo(pit, "confirmed");
   if (!pitInfo) throw new Error("pit_account_not_initialized");
@@ -310,10 +369,60 @@ export async function releaseActiveMatchOnchain(input: {
   const requestedMatch = new PublicKey(input.activeMatchAddress);
   if (!activeMatch.equals(requestedMatch)) throw new Error("pit_active_match_changed");
 
+  const matchInfo = await connection.getAccountInfo(requestedMatch, "confirmed");
+  if (!matchInfo) throw new Error("match_account_unavailable");
+  const ownership = classifyMatchOwnership(matchInfo.owner, programId);
+  const snapshot = decodePublicMatchAccount(requestedMatch.toBase58(), matchInfo.data);
+  const nextNonce = snapshot.matchNonce + 1n;
+  if (nextNonce > 18_446_744_073_709_551_615n) throw new Error("match_nonce_exhausted");
+  const { match: nextMatch } = matchBootstrapAddresses({ pitId: input.pitId, nonce: nextNonce, programId: input.programId });
+
+  if (ownership === "delegated") {
+    const teeRpcUrl = input.teeRpcUrl ?? "https://devnet-tee.magicblock.app";
+    const magicFeeVault = magicFeeVaultPdaFromValidator(teeValidatorForRpc(teeRpcUrl));
+    const teeSession = await createPrivateConnection({
+      teeRpcUrl,
+      publicKey: authority,
+      signMessage: async (message) => {
+        const signed = await wallet.signMessage!(message);
+        return signed instanceof Uint8Array ? signed : signed.signature;
+      },
+    });
+    const feePayer = await ensureTeeFeePayer({
+      baseRpcUrl: input.rpcUrl,
+      teeRpcUrl,
+      teeConnection: teeSession.connection,
+      player: authority,
+      wallet,
+      programId,
+    });
+    await sendTeeTransaction({
+      connection: teeSession.connection,
+      wallet,
+      feePayer,
+      label: "undelegate_match",
+      instructions: [createUndelegateMatchInstruction({
+        matchAddress: requestedMatch.toBase58(),
+        payer: feePayer.publicKey,
+        authorityAddress: authority.toBase58(),
+        magicFeeVaultAddress: magicFeeVault.toBase58(),
+        programId: input.programId,
+      })],
+    });
+    await waitForBaseProgramAccount(connection, requestedMatch, programId);
+  }
+
   const transaction = new Transaction().add(createReleaseActiveMatchInstruction({
     pitAddress: pit.toBase58(),
     matchAddress: requestedMatch.toBase58(),
     authorityAddress: authority.toBase58(),
+    programId: input.programId,
+    force: true,
+  }), createCreateMatchInstruction({
+    pitAddress: pit.toBase58(),
+    matchAddress: nextMatch.toBase58(),
+    authorityAddress: authority.toBase58(),
+    nonce: nextNonce,
     programId: input.programId,
   }));
   transaction.feePayer = authority;
@@ -324,7 +433,62 @@ export async function releaseActiveMatchOnchain(input: {
   if (simulation.err) throw new Error(`release_active_match_simulation_failed: ${simulationError(simulation)}`);
   input.onWalletApprovalRequested?.();
   const signature = await sendAndConfirmWalletTransaction(connection, wallet, transaction, blockhash);
-  return { status: "released" as const, signature };
+  return { status: "released" as const, signature, matchAddress: nextMatch.toBase58(), matchNonce: nextNonce };
+}
+
+export async function restoreDelegatedMatchOnchain(input: {
+  matchAddress: string;
+  rpcUrl: string;
+  teeRpcUrl?: string;
+  programId: string;
+  onWalletApprovalRequested?: () => void;
+}) {
+  const wallet = window.solana;
+  if (!wallet?.signTransaction || !wallet.signMessage) throw new Error("wallet_transaction_and_message_signing_required");
+  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
+  const authority = new PublicKey(connected.publicKey);
+  const programId = new PublicKey(input.programId);
+  const connection = createBaseRpcConnection(input.rpcUrl);
+  const match = new PublicKey(input.matchAddress);
+  const matchInfo = await connection.getAccountInfo(match, "confirmed");
+  if (!matchInfo) throw new Error("match_account_unavailable");
+  if (classifyMatchOwnership(matchInfo.owner, programId) === "base") return { status: "already_restored" as const };
+
+  const snapshot = decodePublicMatchAccount(match.toBase58(), matchInfo.data);
+  if (!snapshot.host || !new PublicKey(snapshot.host).equals(authority)) throw new Error("match_host_wallet_mismatch");
+  const teeRpcUrl = input.teeRpcUrl ?? "https://devnet-tee.magicblock.app";
+  const teeSession = await createPrivateConnection({
+    teeRpcUrl,
+    publicKey: authority,
+    signMessage: async (message) => {
+      const signed = await wallet.signMessage!(message);
+      return signed instanceof Uint8Array ? signed : signed.signature;
+    },
+  });
+  const feePayer = await ensureTeeFeePayer({
+    baseRpcUrl: input.rpcUrl,
+    teeRpcUrl,
+    teeConnection: teeSession.connection,
+    player: authority,
+    wallet,
+    programId,
+  });
+  input.onWalletApprovalRequested?.();
+  const signature = await sendTeeTransaction({
+    connection: teeSession.connection,
+    wallet,
+    feePayer,
+    label: "restore_delegated_match",
+    instructions: [createUndelegateMatchInstruction({
+      matchAddress: match.toBase58(),
+      payer: feePayer.publicKey,
+      authorityAddress: authority.toBase58(),
+      magicFeeVaultAddress: magicFeeVaultPdaFromValidator(teeValidatorForRpc(teeRpcUrl)).toBase58(),
+      programId: input.programId,
+    })],
+  });
+  await waitForBaseProgramAccount(connection, match, programId);
+  return { status: "restored" as const, signature };
 }
 
 export function validateJoinAccounts(
@@ -362,7 +526,7 @@ export async function joinMatchOnchain(input: {
   const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
   const player = new PublicKey(connected.publicKey);
 
-  const connection = new Connection(input.rpcUrl, "confirmed");
+  const connection = createBaseRpcConnection(input.rpcUrl);
   const [programInfo, matchInfo, balanceLamports] = await Promise.all([
     connection.getAccountInfo(new PublicKey(input.programId), "confirmed"),
     connection.getAccountInfo(new PublicKey(input.matchAddress), "confirmed"),

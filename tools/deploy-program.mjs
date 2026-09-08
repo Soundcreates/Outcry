@@ -26,6 +26,10 @@ if (programBytes <= 0) throw new Error("program_artifact_empty");
 const programKeypair = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(await readFile(programId, "utf8"))));
 const programAddress = programKeypair.publicKey;
 const [programDataAddress] = PublicKey.findProgramAddressSync([programAddress.toBuffer()], upgradeableLoader);
+
+console.log("RPC:", cluster);
+console.log("OUTCRY_DEPLOY_RPC:", process.env.OUTCRY_DEPLOY_RPC);
+console.log("OUTCRY_BASE_RPC:", process.env.OUTCRY_BASE_RPC);
 const connection = new Connection(cluster, "confirmed");
 const programDataAccount = await connection.getAccountInfo(programDataAddress, "confirmed");
 const requiredProgramDataBytes = programBytes + programDataMetadataBytes;

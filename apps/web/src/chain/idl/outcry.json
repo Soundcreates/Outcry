@@ -95,7 +95,6 @@
       "accounts": [
         {
           "name": "authority",
-          "writable": true,
           "signer": true,
           "relations": [
             "inventory"
@@ -229,7 +228,6 @@
       "accounts": [
         {
           "name": "authority",
-          "writable": true,
           "signer": true,
           "relations": [
             "quote"
@@ -371,6 +369,10 @@
           }
         },
         {
+          "name": "magic_fee_vault",
+          "writable": true
+        },
+        {
           "name": "magic_program",
           "address": "Magic11111111111111111111111111111111111111"
         },
@@ -402,6 +404,10 @@
         },
         {
           "name": "quote",
+          "writable": true
+        },
+        {
+          "name": "magic_fee_vault",
           "writable": true
         },
         {
@@ -738,11 +744,11 @@
       ],
       "args": [
         {
-          "name": "pit",
+          "name": "_pit",
           "type": "pubkey"
         },
         {
-          "name": "match_nonce",
+          "name": "_match_nonce",
           "type": "u64"
         }
       ]
@@ -1562,7 +1568,6 @@
       "accounts": [
         {
           "name": "authority",
-          "writable": true,
           "signer": true,
           "relations": [
             "inventory"
@@ -1696,7 +1701,6 @@
       "accounts": [
         {
           "name": "authority",
-          "writable": true,
           "signer": true,
           "relations": [
             "quote"
@@ -1905,10 +1909,7 @@
         {
           "name": "authority",
           "writable": true,
-          "signer": true,
-          "relations": [
-            "match_state"
-          ]
+          "signer": true
         },
         {
           "name": "system_program",
@@ -2353,8 +2354,7 @@
       ],
       "accounts": [
         {
-          "name": "match_state",
-          "writable": true
+          "name": "match_state"
         },
         {
           "name": "round",
@@ -2397,8 +2397,7 @@
       ],
       "accounts": [
         {
-          "name": "match_state",
-          "writable": true
+          "name": "match_state"
         },
         {
           "name": "round",
@@ -2631,7 +2630,12 @@
           ]
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "force",
+          "type": "bool"
+        }
+      ]
     },
     {
       "name": "resolve_round",
@@ -2684,41 +2688,6 @@
               }
             ]
           }
-        },
-        {
-          "name": "winning_inventory",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  105,
-                  110,
-                  118,
-                  101,
-                  110,
-                  116,
-                  111,
-                  114,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "round.match_key",
-                "account": "RfqRound"
-              },
-              {
-                "kind": "account",
-                "path": "winning_inventory.authority",
-                "account": "PrivateInventory"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle"
         },
         {
           "name": "resolver",
@@ -2778,41 +2747,6 @@
               }
             ]
           }
-        },
-        {
-          "name": "winning_inventory",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  105,
-                  110,
-                  118,
-                  101,
-                  110,
-                  116,
-                  111,
-                  114,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "round.match_key",
-                "account": "RfqRound"
-              },
-              {
-                "kind": "account",
-                "path": "winning_inventory.authority",
-                "account": "PrivateInventory"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle"
         },
         {
           "name": "authority"
@@ -2930,7 +2864,6 @@
       "accounts": [
         {
           "name": "authority",
-          "writable": true,
           "signer": true,
           "relations": [
             "inventory"
@@ -3069,7 +3002,6 @@
       "accounts": [
         {
           "name": "authority",
-          "writable": true,
           "signer": true,
           "relations": [
             "quote"
@@ -3265,9 +3197,6 @@
           "writable": true
         },
         {
-          "name": "oracle"
-        },
-        {
           "name": "dealer",
           "signer": true
         }
@@ -3305,9 +3234,6 @@
         {
           "name": "quote",
           "writable": true
-        },
-        {
-          "name": "oracle"
         },
         {
           "name": "session_signer",
@@ -3351,6 +3277,106 @@
           "type": "i64"
         }
       ]
+    },
+    {
+      "name": "undelegate_match",
+      "discriminator": [
+        142,
+        117,
+        126,
+        27,
+        242,
+        11,
+        103,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "match_state",
+          "writable": true
+        },
+        {
+          "name": "magic_fee_vault",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "magic_context",
+          "writable": true,
+          "address": "MagicContext1111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "undelegate_oracle",
+      "discriminator": [
+        98,
+        33,
+        8,
+        170,
+        225,
+        184,
+        165,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "oracle.feed_id",
+                "account": "OraclePrice"
+              }
+            ]
+          }
+        },
+        {
+          "name": "magic_fee_vault",
+          "writable": true
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "magic_context",
+          "writable": true,
+          "address": "MagicContext1111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "undelegate_private_inventory",
@@ -3403,6 +3429,10 @@
           }
         },
         {
+          "name": "magic_fee_vault",
+          "writable": true
+        },
+        {
           "name": "magic_program",
           "address": "Magic11111111111111111111111111111111111111"
         },
@@ -3434,6 +3464,48 @@
         },
         {
           "name": "quote",
+          "writable": true
+        },
+        {
+          "name": "magic_fee_vault",
+          "writable": true
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "magic_context",
+          "writable": true,
+          "address": "MagicContext1111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "undelegate_round",
+      "discriminator": [
+        158,
+        187,
+        73,
+        237,
+        216,
+        44,
+        132,
+        162
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "round",
+          "writable": true
+        },
+        {
+          "name": "magic_fee_vault",
           "writable": true
         },
         {
@@ -3860,6 +3932,21 @@
       "code": 6052,
       "name": "MatchNotReleasable",
       "msg": "the active match has progressed and cannot be released"
+    },
+    {
+      "code": 6053,
+      "name": "MatchDelegationDisabled",
+      "msg": "match delegation is disabled; matches must remain on the base layer"
+    },
+    {
+      "code": 6054,
+      "name": "OracleDelegationDisabled",
+      "msg": "oracle delegation is disabled; the oracle must remain on the base layer"
+    },
+    {
+      "code": 6055,
+      "name": "RfqStateCommitDisabled",
+      "msg": "RFQ state commits are disabled; only round and private accounts are delegated"
     }
   ],
   "types": [

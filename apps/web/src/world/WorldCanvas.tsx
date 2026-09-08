@@ -142,6 +142,11 @@ export default function WorldCanvas({ worldId, onExit }: Props) {
             matchAddress,
             walletAddress,
           })}
+          onMatchAddressChanged={(matchAddress) => setPit((current) => current ? {
+            ...current,
+            matchAddress,
+            chainConfirmed: false,
+          } : current)}
           onChainSeatConflict={({ matchAddress, walletAddress }) => roomRef.current?.send("reconcileSeat", {
             matchAddress,
             walletAddress,

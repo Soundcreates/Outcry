@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PublicKey } from "@solana/web3.js";
+import { baseRpcConfigurationMessage, browserBaseRpc } from "../chain/baseRpc";
 import { unlockPrivateInventory, type PrivateInventorySnapshot } from "../chain/privacy";
 
 type Props = {
@@ -9,7 +10,6 @@ type Props = {
 };
 
 const teeRpc = import.meta.env.VITE_MAGICBLOCK_TEE_RPC || import.meta.env.NEXT_PUBLIC_MAGICBLOCK_TEE_RPC || "";
-const baseRpc = import.meta.env.VITE_SOLANA_BASE_RPC || "https://api.devnet.solana.com";
 const teeValidator = import.meta.env.VITE_MAGICBLOCK_TEE_VALIDATOR || undefined;
 
 export default function PrivateInventoryPanel({ matchAddress, playerAddress, programId }: Props) {
@@ -29,11 +29,16 @@ export default function PrivateInventoryPanel({ matchAddress, playerAddress, pro
       setError("tee_rpc_unconfigured");
       return;
     }
+    if (!browserBaseRpc.url) {
+      setStatus("error");
+      setError(baseRpcConfigurationMessage(browserBaseRpc.error));
+      return;
+    }
     setStatus("loading");
     setError("");
     try {
       const next = await unlockPrivateInventory({
-        baseRpcUrl: baseRpc,
+        baseRpcUrl: browserBaseRpc.url,
         teeRpcUrl: teeRpc,
         matchAddress: new PublicKey(matchAddress),
         player: new PublicKey(playerAddress),

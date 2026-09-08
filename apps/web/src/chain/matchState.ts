@@ -1,6 +1,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import outcryIdl from "./idl/outcry.json";
+import { createBaseRpcConnection } from "./baseRpc";
 
 const MATCH_DISCRIMINATOR = Uint8Array.from(outcryIdl.accounts.find((account) => account.name === "Match")?.discriminator ?? []);
 const ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.accounts.find((account) => account.name === "RfqRound")?.discriminator ?? []);
@@ -11,11 +12,12 @@ const MAX_ROUNDS = 8;
 const LEGACY_MATCH_BYTES = 372;
 const CURRENT_MATCH_BYTES = 373;
 export const MATCH_STATE_TIMEOUT_MS = 8_000;
-export const ORACLE_FEED_ID = Uint8Array.from("c6ad3e841d9c0f248adff90cf776f839fd59f1cbd8ffbc8f9402883ea16e8420".match(/../g)!.map((byte) => Number.parseInt(byte, 16)));
-export const ORACLE_PRICE_UPDATE_ADDRESS = "ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu";
+export const ORACLE_FEED_ID = Uint8Array.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d".match(/../g)!.map((byte) => Number.parseInt(byte, 16)));
+export const ORACLE_FEED_ID_HEX = Array.from(ORACLE_FEED_ID, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 export type PublicMatchSnapshot = {
   matchAddress: string;
+  accountOwner?: string;
   authority: string;
   pit: string;
   matchNonce: bigint;
@@ -169,12 +171,13 @@ export async function loadPublicMatchState(input: {
 }): Promise<PublicMatchSnapshot> {
   const programId = new PublicKey(input.programId ?? PROGRAM_ID);
   const match = new PublicKey(input.matchAddress);
-  const connection = input.connection ?? new Connection(input.rpcUrl, "confirmed");
+  const connection = input.connection ?? createBaseRpcConnection(input.rpcUrl);
   const timeoutMs = input.timeoutMs ?? MATCH_STATE_TIMEOUT_MS;
   const matchInfo = await readWithTimeout(connection.getAccountInfo(match, "confirmed"), timeoutMs);
   const matchOwnerIsValid = matchInfo?.owner.equals(programId) || matchInfo?.owner.equals(DELEGATION_PROGRAM_ID);
   if (!matchInfo || !matchOwnerIsValid) throw new Error("match_account_unavailable");
   const snapshot = decodePublicMatchAccount(match.toBase58(), matchInfo.data);
+  snapshot.accountOwner = matchInfo.owner.toBase58();
 
   const resultKey = keyAt(matchInfo.data, matchInfo.data.length === CURRENT_MATCH_BYTES ? 340 : 339);
   const roundKey = snapshot.status === "STARTED"

@@ -6,17 +6,21 @@ type Props = {
   walletAddress?: string;
   error?: string;
   settling?: boolean;
+  resolving?: boolean;
   starting?: boolean;
   autoStartIn?: number;
   onRetry?: () => void;
   onStart?: () => Promise<void>;
   onSettle?: () => Promise<void>;
+  onResolve?: () => Promise<void>;
   onReturn?: () => void;
+  onReleaseStaleMatch?: () => void;
+  releasingStaleMatch?: boolean;
 };
 
 const shortKey = (value?: string) => value ? `${value.slice(0, 4)}…${value.slice(-4)}` : "—";
 
-export default function MatchHud({ snapshot, walletAddress, error, settling, starting, autoStartIn, onRetry, onStart, onSettle, onReturn }: Props) {
+export default function MatchHud({ snapshot, walletAddress, error, settling, resolving, starting, autoStartIn, onRetry, onStart, onSettle, onResolve, onReturn, onReleaseStaleMatch, releasingStaleMatch }: Props) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -40,6 +44,7 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, sta
   const localIsTaker = Boolean(walletAddress && snapshot.taker === walletAddress);
   const localIsHost = Boolean(walletAddress && snapshot.host === walletAddress);
   const canStart = localIsHost && snapshot.status === "WAITING" && snapshot.playerCount >= 2;
+  const canResolve = localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount >= snapshot.dealerCount;
   const finalScores = snapshot.finalScoresE6?.slice(0, snapshot.playerCount) ?? [];
   const localIndex = walletAddress ? snapshot.players.indexOf(walletAddress) : -1;
   const localScore = localIndex >= 0 ? finalScores[localIndex] : undefined;
@@ -82,6 +87,14 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, sta
         <div><span>Round clock</span><strong>{remaining === undefined ? "—" : `${remaining}s`}</strong></div>
         <div><span>Private inventory</span><strong>Only you · TEE sync</strong></div>
       </div>
+      {canResolve && onResolve && (
+        <div className="match-lobby">
+          <strong>All dealer quotes are sealed. Resolve the round to continue.</strong>
+          <button disabled={resolving} onClick={() => void onResolve()} type="button">
+            {resolving ? "Resolving round…" : "Resolve round"}
+          </button>
+        </div>
+      )}
       {snapshot.status === "WAITING" && (
         <div className="match-lobby">
           <span>{snapshot.playerCount}/{snapshot.capacity} players seated · minimum 2 required</span>
@@ -111,6 +124,14 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, sta
               {settling ? "Settling…" : "Settle payout"}
             </button>
           ) : null}
+        </div>
+      )}
+      {localIsHost && onReleaseStaleMatch && (
+        <div className="match-lobby">
+          <strong>Host recovery: abandon this match and create a fresh one.</strong>
+          <button disabled={releasingStaleMatch} onClick={onReleaseStaleMatch} type="button">
+            {releasingStaleMatch ? "Releasing stale match…" : "Release stale match / start fresh"}
+          </button>
         </div>
       )}
     </section>

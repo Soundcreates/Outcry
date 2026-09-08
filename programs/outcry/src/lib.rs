@@ -32,15 +32,13 @@ pub const SIDE_BUY: u8 = game::BUY;
 pub const SIDE_SELL: u8 = game::SELL;
 pub const ORACLE_MAX_AGE_SECONDS: i64 = game::DEFAULT_ORACLE_MAX_AGE_SECONDS;
 pub const MAX_DEVIATION_BPS: u64 = game::DEFAULT_MAX_DEVIATION_BPS;
-pub const MAGICBLOCK_PYTH_ORACLE_PROGRAM_ID: Pubkey =
-    pubkey!("PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd");
-pub const MAGICBLOCK_PYTH_SOL_USD_FEED: Pubkey =
-    pubkey!("ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu");
-pub const MAGICBLOCK_PYTH_SOL_USD_FEED_ID: [u8; 32] = [
-    0xc6, 0xad, 0x3e, 0x84, 0x1d, 0x9c, 0x0f, 0x24,
-    0x8a, 0xdf, 0xf9, 0x0c, 0xf7, 0x76, 0xf8, 0x39,
-    0xfd, 0x59, 0xf1, 0xcb, 0xd8, 0xff, 0xbc, 0x8f,
-    0x94, 0x02, 0x88, 0x3e, 0xa1, 0x6e, 0x84, 0x20,
+pub const PYTH_RECEIVER_PROGRAM_ID: Pubkey =
+    pubkey!("rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ");
+pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
+    0xef, 0x0d, 0x8b, 0x6f, 0xda, 0x2c, 0xeb, 0xa4,
+    0x1d, 0xa1, 0x5d, 0x40, 0x95, 0xd1, 0xda, 0x39,
+    0x2a, 0x0d, 0x2f, 0x8e, 0xd0, 0xc6, 0xc7, 0xbc,
+    0x0f, 0x4c, 0xfa, 0xc8, 0xc2, 0x80, 0xb5, 0x6d,
 ];
 pub const SESSION_SEED: &[u8] = b"session";
 pub const ESCROW_SEED: &[u8] = b"escrow";
@@ -95,7 +93,7 @@ pub mod outcry {
         Ok(())
     }
 
-    pub fn release_active_match(ctx: Context<ReleaseActiveMatch>) -> Result<()> {
+    pub fn release_active_match(ctx: Context<ReleaseActiveMatch>, force: bool) -> Result<()> {
         let pit = &mut ctx.accounts.pit;
         let match_info = ctx.accounts.match_state.to_account_info();
         require_keys_eq!(pit.active_match, match_info.key(), ErrorCode::ActiveMatchMismatch);
@@ -140,10 +138,12 @@ pub mod outcry {
             &crate::ID,
         );
         require_keys_eq!(expected_match, match_info.key(), ErrorCode::InvalidMatchAccount);
-        require!(
-            match_can_be_released(status, current_round, result),
-            ErrorCode::MatchNotReleasable
-        );
+        if !force {
+            require!(
+                match_can_be_released(status, current_round, result),
+                ErrorCode::MatchNotReleasable
+            );
+        }
 
         pit.active_match = Pubkey::default();
         Ok(())
@@ -288,7 +288,7 @@ pub mod outcry {
         feed_id: [u8; 32],
     ) -> Result<()> {
         let clock = Clock::get()?;
-        require!(feed_id == MAGICBLOCK_PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
+        require!(feed_id == PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
         let (price_e6, published_at) = read_pyth_price(&ctx.accounts.price_update, &clock)?;
         let oracle = &mut ctx.accounts.oracle;
         oracle.authority = ctx.accounts.authority.key();
@@ -303,7 +303,7 @@ pub mod outcry {
         ctx: Context<InitializeOracleUnpriced>,
         feed_id: [u8; 32],
     ) -> Result<()> {
-        require!(feed_id == MAGICBLOCK_PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
+        require!(feed_id == PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
         let oracle = &mut ctx.accounts.oracle;
         oracle.authority = ctx.accounts.authority.key();
         oracle.feed_id = feed_id;
@@ -316,34 +316,18 @@ pub mod outcry {
     pub fn update_oracle(ctx: Context<UpdateOracle>) -> Result<()> {
         let clock = Clock::get()?;
         let (price_e6, published_at) = read_pyth_price(&ctx.accounts.price_update, &clock)?;
-        require!(ctx.accounts.oracle.feed_id == MAGICBLOCK_PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
+        require!(ctx.accounts.oracle.feed_id == PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
         ctx.accounts.oracle.price_e6 = price_e6;
         ctx.accounts.oracle.published_at = published_at;
         Ok(())
     }
 
     pub fn delegate_match(
-        ctx: Context<DelegateMatch>,
-        pit: Pubkey,
-        match_nonce: u64,
+        _ctx: Context<DelegateMatch>,
+        _pit: Pubkey,
+        _match_nonce: u64,
     ) -> Result<()> {
-        let match_state = {
-            let match_data = ctx.accounts.match_state.try_borrow_data()?;
-            Match::try_deserialize(&mut &match_data[..])?
-        };
-        require_keys_eq!(match_state.players[0], ctx.accounts.authority.key(), ErrorCode::NotMatchHost);
-        require_keys_eq!(match_state.pit, pit, ErrorCode::InvalidMatchAccount);
-        if ctx.accounts.match_state.to_account_info().owner != &ephemeral_rollups_sdk::id() {
-            ctx.accounts.delegate_match_state(
-                &ctx.accounts.authority,
-                &[b"match", pit.as_ref(), &match_nonce.to_le_bytes()],
-                DelegateConfig {
-                    validator: ctx.accounts.validator.as_ref().map(|value| value.key()),
-                    ..Default::default()
-                },
-            )?;
-        }
-        Ok(())
+        err!(ErrorCode::MatchDelegationDisabled)
     }
 
     pub fn delegate_round(ctx: Context<DelegateRound>, match_key: Pubkey, round: u8) -> Result<()> {
@@ -367,23 +351,8 @@ pub mod outcry {
     }
 
     pub fn delegate_oracle(ctx: Context<DelegateOracle>, feed_id: [u8; 32]) -> Result<()> {
-        require!(feed_id == MAGICBLOCK_PYTH_SOL_USD_FEED_ID, ErrorCode::OracleInvalid);
-        let oracle = {
-            let oracle_data = ctx.accounts.oracle.try_borrow_data()?;
-            OraclePrice::try_deserialize(&mut &oracle_data[..])?
-        };
-        require_keys_eq!(oracle.authority, ctx.accounts.authority.key(), ErrorCode::PrivateAuthorityMismatch);
-        if ctx.accounts.oracle.to_account_info().owner != &ephemeral_rollups_sdk::id() {
-            ctx.accounts.delegate_oracle(
-                &ctx.accounts.authority,
-                &[b"oracle", feed_id.as_ref()],
-                DelegateConfig {
-                    validator: ctx.accounts.validator.as_ref().map(|value| value.key()),
-                    ..Default::default()
-                },
-            )?;
-        }
-        Ok(())
+        let _ = (ctx, feed_id);
+        err!(ErrorCode::OracleDelegationDisabled)
     }
 
     pub fn open_rfq(
@@ -397,7 +366,7 @@ pub mod outcry {
         let oracle_key = ctx.accounts.oracle.key();
         let round_bump = ctx.accounts.round.bump;
         open_rfq_state(
-            &mut ctx.accounts.match_state,
+            &ctx.accounts.match_state,
             &mut ctx.accounts.round,
             &ctx.accounts.oracle,
             match_key,
@@ -430,7 +399,7 @@ pub mod outcry {
         let oracle_key = ctx.accounts.oracle.key();
         let round_bump = ctx.accounts.round.bump;
         open_rfq_state(
-            &mut ctx.accounts.match_state,
+            &ctx.accounts.match_state,
             &mut ctx.accounts.round,
             &ctx.accounts.oracle,
             match_key,
@@ -445,30 +414,16 @@ pub mod outcry {
     }
 
     pub fn commit_rfq_state(ctx: Context<CommitRfqState>) -> Result<()> {
-        MagicIntentBundleBuilder::new(
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.magic_context.to_account_info(),
-            ctx.accounts.magic_program.to_account_info(),
-        )
-        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
-        .commit(&[
-            ctx.accounts.match_state.to_account_info(),
-            ctx.accounts.round.to_account_info(),
-            ctx.accounts.oracle.to_account_info(),
-        ])
-        .build_and_invoke()?;
-        Ok(())
+        let _ = ctx;
+        err!(ErrorCode::RfqStateCommitDisabled)
     }
 
     pub fn submit_quote(ctx: Context<SubmitQuote>, price_e6: i64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
-        let oracle_key = ctx.accounts.oracle.key();
         submit_quote_state(
             &ctx.accounts.match_state,
             &mut ctx.accounts.round,
             &mut ctx.accounts.quote,
-            &ctx.accounts.oracle,
-            oracle_key,
             ctx.accounts.dealer.key(),
             price_e6,
             now,
@@ -485,13 +440,10 @@ pub mod outcry {
             now,
             game::SessionAction::SubmitQuote,
         )?;
-        let oracle_key = ctx.accounts.oracle.key();
         submit_quote_state(
             &ctx.accounts.match_state,
             &mut ctx.accounts.round,
             &mut ctx.accounts.quote,
-            &ctx.accounts.oracle,
-            oracle_key,
             ctx.accounts.authority.key(),
             price_e6,
             now,
@@ -500,18 +452,12 @@ pub mod outcry {
 
     pub fn resolve_round(ctx: Context<ResolveRound>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
-        let oracle_key = ctx.accounts.oracle.key();
         let taker_inventory_key = ctx.accounts.taker_inventory.key();
-        let winning_inventory_key = ctx.accounts.winning_inventory.key();
         resolve_round_state(
             &ctx.accounts.match_state,
             &mut ctx.accounts.round,
             &mut ctx.accounts.taker_inventory,
-            &mut ctx.accounts.winning_inventory,
-            &ctx.accounts.oracle,
-            oracle_key,
             taker_inventory_key,
-            winning_inventory_key,
             ctx.remaining_accounts,
             now,
         )
@@ -528,18 +474,12 @@ pub mod outcry {
             now,
             game::SessionAction::ResolveRound,
         )?;
-        let oracle_key = ctx.accounts.oracle.key();
         let taker_inventory_key = ctx.accounts.taker_inventory.key();
-        let winning_inventory_key = ctx.accounts.winning_inventory.key();
         resolve_round_state(
             &ctx.accounts.match_state,
             &mut ctx.accounts.round,
             &mut ctx.accounts.taker_inventory,
-            &mut ctx.accounts.winning_inventory,
-            &ctx.accounts.oracle,
-            oracle_key,
             taker_inventory_key,
-            winning_inventory_key,
             ctx.remaining_accounts,
             now,
         )
@@ -859,6 +799,7 @@ pub mod outcry {
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
         )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
         .commit(&[ctx.accounts.quote.to_account_info()])
         .build_and_invoke()?;
         Ok(())
@@ -870,6 +811,7 @@ pub mod outcry {
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
         )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
         .commit(&[ctx.accounts.inventory.to_account_info()])
         .build_and_invoke()?;
         Ok(())
@@ -881,6 +823,7 @@ pub mod outcry {
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
         )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
         .commit_and_undelegate(&[ctx.accounts.quote.to_account_info()])
         .build_and_invoke()?;
         Ok(())
@@ -892,7 +835,45 @@ pub mod outcry {
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
         )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
         .commit_and_undelegate(&[ctx.accounts.inventory.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    pub fn undelegate_match(ctx: Context<UndelegateMatch>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
+        .commit_and_undelegate(&[ctx.accounts.match_state.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    pub fn undelegate_oracle(ctx: Context<UndelegateOracle>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
+        .commit_and_undelegate(&[ctx.accounts.oracle.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    pub fn undelegate_round(ctx: Context<UndelegateRound>) -> Result<()> {
+        require!(ctx.accounts.round.status == ROUND_RESOLVED, ErrorCode::RoundNotResolved);
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .magic_fee_vault(ctx.accounts.magic_fee_vault.to_account_info())
+        .commit_and_undelegate(&[ctx.accounts.round.to_account_info()])
         .build_and_invoke()?;
         Ok(())
     }
@@ -948,11 +929,9 @@ fn validate_session_grant(
 fn read_pyth_price(price_update: &UncheckedAccount, clock: &Clock) -> Result<(i64, i64)> {
     require_keys_eq!(
         *price_update.owner,
-        MAGICBLOCK_PYTH_ORACLE_PROGRAM_ID,
+        PYTH_RECEIVER_PROGRAM_ID,
         ErrorCode::OracleInvalid
     );
-    let account_key = price_update.key();
-    require_keys_eq!(account_key, MAGICBLOCK_PYTH_SOL_USD_FEED, ErrorCode::OracleInvalid);
     let account_info = price_update.to_account_info();
     let data = account_info.try_borrow_data()?;
     let mut data_slice = data.as_ref();
@@ -960,7 +939,7 @@ fn read_pyth_price(price_update: &UncheckedAccount, clock: &Clock) -> Result<(i6
         .map_err(|_| error!(ErrorCode::OracleInvalid))?;
     require!(price_update.verification_level == VerificationLevel::Full, ErrorCode::OracleInvalid);
     let price = price_update
-        .get_price_unchecked(&MAGICBLOCK_PYTH_SOL_USD_FEED_ID)
+        .get_price_unchecked(&PYTH_SOL_USD_FEED_ID)
         .map_err(|_: GetPriceError| error!(ErrorCode::OracleInvalid))?;
     require!(price.publish_time <= clock.unix_timestamp, ErrorCode::OracleInvalid);
     require!(
@@ -971,9 +950,9 @@ fn read_pyth_price(price_update: &UncheckedAccount, clock: &Clock) -> Result<(i6
 }
 
 fn magicblock_price_e6(price: Price) -> Result<i64> {
-    require!((0..=18).contains(&price.exponent), ErrorCode::OracleInvalid);
+    require!((-18..=18).contains(&price.exponent), ErrorCode::OracleInvalid);
     require!(price.price > 0, ErrorCode::OracleInvalid);
-    let scale = 6 - price.exponent;
+    let scale = price.exponent + 6;
     let magnitude = i128::from(price.price);
     let value = if scale >= 0 {
         magnitude
@@ -993,7 +972,7 @@ fn pow10(exponent: u32) -> Result<i128> {
 }
 
 fn open_rfq_state(
-    match_state: &mut Match,
+    match_state: &Match,
     round: &mut RfqRound,
     oracle: &OraclePrice,
     match_key: Pubkey,
@@ -1044,8 +1023,6 @@ fn submit_quote_state(
     match_state: &Match,
     round: &mut RfqRound,
     quote: &mut PrivateQuote,
-    oracle: &OraclePrice,
-    oracle_key: Pubkey,
     dealer: Pubkey,
     price_e6: i64,
     now: i64,
@@ -1053,19 +1030,12 @@ fn submit_quote_state(
     require!(round.status == ROUND_OPEN, ErrorCode::RoundNotOpen);
     map_game_result(game::validate_quantity(round.quantity_lots))?;
     require!(now <= round.deadline, ErrorCode::QuoteDeadlinePassed);
-    require_keys_eq!(oracle_key, round.oracle, ErrorCode::OracleMismatch);
     require!(quote.match_key == round.match_key, ErrorCode::InvalidQuoteAccount);
     require!(quote.round == round.round, ErrorCode::InvalidQuoteAccount);
     require_keys_eq!(quote.authority, dealer, ErrorCode::QuoteNotAuthorized);
     require!(dealer != round.taker, ErrorCode::DealerIsTaker);
     require!(match_state.players.contains(&dealer), ErrorCode::NotAMatchPlayer);
     require!(!quote.locked, ErrorCode::QuoteLocked);
-    map_game_result(game::validate_oracle(
-        oracle.price_e6,
-        oracle.published_at,
-        now,
-        ORACLE_MAX_AGE_SECONDS,
-    ))?;
     map_game_result(game::validate_quote(price_e6, round.oracle_price_e6, MAX_DEVIATION_BPS))?;
 
     quote.price_e6 = price_e6;
@@ -1079,27 +1049,25 @@ fn resolve_round_state<'info>(
     match_state: &Match,
     round: &mut RfqRound,
     taker_inventory: &mut PrivateInventory,
-    winning_inventory: &mut PrivateInventory,
-    oracle: &OraclePrice,
-    oracle_key: Pubkey,
     taker_inventory_key: Pubkey,
-    winning_inventory_key: Pubkey,
     remaining_accounts: &'info [AccountInfo<'info>],
     now: i64,
 ) -> Result<()> {
     require!(round.status == ROUND_OPEN, ErrorCode::RoundNotOpen);
     map_game_result(game::validate_quantity(round.quantity_lots))?;
     require!(now >= round.deadline || round.quote_count >= match_state.player_count.saturating_sub(1), ErrorCode::DeadlineNotReached);
-    require_keys_eq!(oracle_key, round.oracle, ErrorCode::OracleMismatch);
-    map_game_result(game::validate_oracle(
-        oracle.price_e6,
-        oracle.published_at,
-        now,
-        ORACLE_MAX_AGE_SECONDS,
-    ))?;
 
     let mut candidates = Vec::with_capacity(remaining_accounts.len());
+    let mut inventory_accounts = Vec::new();
     for account_info in remaining_accounts {
+        let data = account_info.try_borrow_data()?;
+        let discriminator = data.get(..8).ok_or(error!(ErrorCode::InvalidQuoteAccount))?;
+        if discriminator == PrivateInventory::DISCRIMINATOR {
+            inventory_accounts.push(account_info);
+            continue;
+        }
+        require!(discriminator == PrivateQuote::DISCRIMINATOR, ErrorCode::InvalidQuoteAccount);
+        drop(data);
         let quote = Account::<PrivateQuote>::try_from(account_info).map_err(|_| error!(ErrorCode::InvalidQuoteAccount))?;
         require!(quote.match_key == round.match_key, ErrorCode::InvalidQuoteAccount);
         require!(quote.round == round.round, ErrorCode::InvalidQuoteAccount);
@@ -1118,21 +1086,28 @@ fn resolve_round_state<'info>(
     require!(candidates.len() >= match_state.player_count.saturating_sub(1) as usize, ErrorCode::NotEnoughQuotes);
     let winner = map_game_result(game::select_winner(round.side, &candidates))?;
 
-    require_keys_eq!(taker_inventory.match_key, round.match_key, ErrorCode::InventoryMismatch);
-    require_keys_eq!(taker_inventory.authority, round.taker, ErrorCode::InventoryMismatch);
-    require_keys_eq!(winning_inventory.match_key, round.match_key, ErrorCode::InventoryMismatch);
-    require_keys_eq!(winning_inventory.authority, winner.dealer, ErrorCode::InventoryMismatch);
-    require!(taker_inventory_key != winning_inventory_key, ErrorCode::InventoryMismatch);
-    let (expected_taker_inventory, _) = Pubkey::find_program_address(
-        &[PRIVATE_INVENTORY_SEED, round.match_key.as_ref(), round.taker.as_ref()],
-        &crate::ID,
-    );
     let (expected_winner_inventory, _) = Pubkey::find_program_address(
         &[PRIVATE_INVENTORY_SEED, round.match_key.as_ref(), winner.dealer.as_ref()],
         &crate::ID,
     );
+    let winning_inventory_info = inventory_accounts
+        .into_iter()
+        .find(|account_info| account_info.key() == expected_winner_inventory)
+        .ok_or(error!(ErrorCode::InventoryMismatch))?;
+    let mut winning_inventory = Account::<PrivateInventory>::try_from(winning_inventory_info)
+        .map_err(|_| error!(ErrorCode::InventoryMismatch))?;
+
+    require_keys_eq!(taker_inventory.match_key, round.match_key, ErrorCode::InventoryMismatch);
+    require_keys_eq!(taker_inventory.authority, round.taker, ErrorCode::InventoryMismatch);
+    require_keys_eq!(winning_inventory.match_key, round.match_key, ErrorCode::InventoryMismatch);
+    require_keys_eq!(winning_inventory.authority, winner.dealer, ErrorCode::InventoryMismatch);
+    require!(taker_inventory_key != winning_inventory.key(), ErrorCode::InventoryMismatch);
+    let (expected_taker_inventory, _) = Pubkey::find_program_address(
+        &[PRIVATE_INVENTORY_SEED, round.match_key.as_ref(), round.taker.as_ref()],
+        &crate::ID,
+    );
     require_keys_eq!(taker_inventory_key, expected_taker_inventory, ErrorCode::InventoryMismatch);
-    require_keys_eq!(winning_inventory_key, expected_winner_inventory, ErrorCode::InventoryMismatch);
+    require_keys_eq!(winning_inventory.key(), expected_winner_inventory, ErrorCode::InventoryMismatch);
 
     let mut taker = game::Inventory {
         sol_position_lots: taker_inventory.sol_position_lots,
@@ -1364,7 +1339,6 @@ pub struct UpdateOracle<'info> {
 
 #[derive(Accounts)]
 pub struct OpenRfq<'info> {
-    #[account(mut)]
     pub match_state: Account<'info, Match>,
     #[account(
         mut,
@@ -1378,7 +1352,6 @@ pub struct OpenRfq<'info> {
 
 #[derive(Accounts)]
 pub struct OpenRfqSession<'info> {
-    #[account(mut)]
     pub match_state: Account<'info, Match>,
     #[account(
         mut,
@@ -1414,7 +1387,6 @@ pub struct SubmitQuote<'info> {
         bump = quote.bump,
     )]
     pub quote: Account<'info, PrivateQuote>,
-    pub oracle: Account<'info, OraclePrice>,
     pub dealer: Signer<'info>,
 }
 
@@ -1435,7 +1407,6 @@ pub struct SubmitQuoteSession<'info> {
         bump = quote.bump,
     )]
     pub quote: Account<'info, PrivateQuote>,
-    pub oracle: Account<'info, OraclePrice>,
     pub session_signer: Signer<'info>,
     #[account(
         seeds = [SESSION_SEED, match_state.key().as_ref(), authority.key().as_ref(), session_signer.key().as_ref()],
@@ -1459,9 +1430,6 @@ pub struct ResolveRound<'info> {
         bump = taker_inventory.bump,
     )]
     pub taker_inventory: Account<'info, PrivateInventory>,
-    #[account(mut, seeds = [PRIVATE_INVENTORY_SEED, round.match_key.as_ref(), winning_inventory.authority.as_ref()], bump = winning_inventory.bump)]
-    pub winning_inventory: Account<'info, PrivateInventory>,
-    pub oracle: Account<'info, OraclePrice>,
     pub resolver: Signer<'info>,
 }
 
@@ -1480,9 +1448,6 @@ pub struct ResolveRoundSession<'info> {
         bump = taker_inventory.bump,
     )]
     pub taker_inventory: Account<'info, PrivateInventory>,
-    #[account(mut, seeds = [PRIVATE_INVENTORY_SEED, round.match_key.as_ref(), winning_inventory.authority.as_ref()], bump = winning_inventory.bump)]
-    pub winning_inventory: Account<'info, PrivateInventory>,
-    pub oracle: Account<'info, OraclePrice>,
     /// CHECK: membership and the SessionGrant PDA bind this authority to the match.
     pub authority: UncheckedAccount<'info>,
     pub session_signer: Signer<'info>,
@@ -1520,6 +1485,7 @@ pub struct NextRoundSession<'info> {
 
 #[derive(Accounts)]
 pub struct FinalizeScores<'info> {
+    #[account(constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
     pub match_state: Account<'info, Match>,
     #[account(mut, address = match_state.result)]
     pub result: Account<'info, MatchResult>,
@@ -1557,7 +1523,7 @@ pub struct InitializeEscrow<'info> {
 
 #[derive(Accounts)]
 pub struct InitializeMatchResult<'info> {
-    #[account(mut, has_one = authority)]
+    #[account(mut, constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
     pub match_state: Account<'info, Match>,
     #[account(
         init,
@@ -1693,7 +1659,6 @@ pub struct DelegatePrivateInventory<'info> {
 
 #[derive(Accounts)]
 pub struct PrivateQuotePermission<'info> {
-    #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
         mut,
@@ -1723,7 +1688,6 @@ pub struct PrivateQuotePermission<'info> {
 
 #[derive(Accounts)]
 pub struct PrivateInventoryPermission<'info> {
-    #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
         mut,
@@ -1786,6 +1750,9 @@ pub struct CommitPrivateQuote<'info> {
         bump,
     )]
     pub quote: Account<'info, PrivateQuote>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
 }
 
 #[commit]
@@ -1799,6 +1766,9 @@ pub struct CommitPrivateInventory<'info> {
         bump,
     )]
     pub inventory: Account<'info, PrivateInventory>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
 }
 
 #[commit]
@@ -1812,6 +1782,9 @@ pub struct UndelegatePrivateQuote<'info> {
         bump,
     )]
     pub quote: Account<'info, PrivateQuote>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
 }
 
 #[commit]
@@ -1825,6 +1798,51 @@ pub struct UndelegatePrivateInventory<'info> {
         bump,
     )]
     pub inventory: Account<'info, PrivateInventory>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateRound<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub round: Account<'info, RfqRound>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateMatch<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub match_state: Account<'info, Match>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
+    #[account(constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
+    pub authority: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateOracle<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"oracle", oracle.feed_id.as_ref()],
+        bump = oracle.bump,
+    )]
+    pub oracle: Account<'info, OraclePrice>,
+    /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
+    #[account(mut)]
+    pub magic_fee_vault: UncheckedAccount<'info>,
 }
 
 #[account]
@@ -2109,6 +2127,12 @@ pub enum ErrorCode {
     ActiveMatchMismatch,
     #[msg("the active match has progressed and cannot be released")]
     MatchNotReleasable,
+    #[msg("match delegation is disabled; matches must remain on the base layer")]
+    MatchDelegationDisabled,
+    #[msg("oracle delegation is disabled; the oracle must remain on the base layer")]
+    OracleDelegationDisabled,
+    #[msg("RFQ state commits are disabled; only round and private accounts are delegated")]
+    RfqStateCommitDisabled,
 }
 
 #[cfg(test)]
@@ -2206,14 +2230,14 @@ mod tests {
         let price = Price {
             price: 10_508_123_456,
             conf: 1,
-            exponent: 8,
+            exponent: -8,
             publish_time: 0,
         };
         assert_eq!(magicblock_price_e6(price).unwrap(), 105_081_234);
 
-        let rounded_down = Price { exponent: 7, ..price };
+        let rounded_down = Price { exponent: -7, ..price };
         assert_eq!(magicblock_price_e6(rounded_down).unwrap(), 1_050_812_345);
-        assert!(magicblock_price_e6(Price { price: 1, exponent: 18, ..price }).is_err());
+        assert!(magicblock_price_e6(Price { price: 1, exponent: -19, ..price }).is_err());
         assert!(magicblock_price_e6(Price { exponent: 19, ..price }).is_err());
     }
 }

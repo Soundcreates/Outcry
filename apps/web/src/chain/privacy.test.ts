@@ -6,6 +6,7 @@ import {
   assertPrivateReadAccess,
   canReadPrivateAccount,
   createDelegatePrivateInventoryInstruction,
+  createInitPrivateQuotePermissionInstruction,
   createInitializePrivateInventoryInstruction,
   createInitPrivateInventoryPermissionInstruction,
   createPrivateConnection,
@@ -152,8 +153,14 @@ assert.equal(delegateInventory.keys[5].pubkey.equals(bob), true);
 assert.equal(delegateInventory.keys[7].pubkey.equals(DELEGATION_PROGRAM_ID), true);
 assert.equal(delegateInventory.data.length, 72);
 const initializeInventoryPermission = createInitPrivateInventoryPermissionInstruction({ matchAddress: match, player: alice, programId: program });
+assert.equal(initializeInventoryPermission.keys[0].isWritable, false);
+assert.equal(initializeInventoryPermission.keys[0].isSigner, true);
 assert.equal(initializeInventoryPermission.keys[1].pubkey.equals(aliceInventory.account), true);
+assert.equal(initializeInventoryPermission.keys[1].isWritable, true);
 assert.equal(initializeInventoryPermission.keys[2].pubkey.equals(privatePermissionPda(aliceInventory.account)), true);
+const initializeQuotePermission = createInitPrivateQuotePermissionInstruction({ matchAddress: match, dealer: alice, round: 0, programId: program });
+assert.equal(initializeQuotePermission.keys[0].isWritable, false);
+assert.equal(initializeQuotePermission.keys[0].isSigner, true);
 
 const privateQuotePanelSource = await readFile(new URL("../match/PrivateQuotePanel.tsx", import.meta.url), "utf8");
 const privateInventoryPanelSource = await readFile(new URL("../match/PrivateInventoryPanel.tsx", import.meta.url), "utf8");
@@ -165,7 +172,8 @@ assert.match(privateQuotePanelSource, /setStatus\("error"\)/);
 assert.match(privateQuotePanelSource, /onClick=\{\(\) => void submit\(\)\}/);
 assert.doesNotMatch(privateQuotePanelSource, /new Connection|VITE_SOLANA_RPC|NEXT_PUBLIC_SOLANA_RPC/);
 assert.match(privateInventoryPanelSource, /unlockPrivateInventory/);
-assert.match(privateInventoryPanelSource, /VITE_SOLANA_BASE_RPC/);
+assert.match(privateInventoryPanelSource, /browserBaseRpc/);
+assert.match(privateQuotePanelSource, /browserBaseRpc/);
 assert.match(privateInventoryPanelSource, /wallet\.signTransaction/);
 assert.match(privacySource, /ensureTeeFeePayer/);
 assert.match(privacySource, /feePayer: input\.feePayer/);

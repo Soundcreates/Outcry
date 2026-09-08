@@ -49,6 +49,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       rpcUrl: env.OUTCRY_BASE_RPC,
       programId: env.OUTCRY_PROGRAM_ID,
     });
+    const onchainMatch = await this.membershipReader?.readActiveMatch("wall-street-01");
+    if (onchainMatch) this.activeMatchAddress = onchainMatch;
     this.setState(new WorldState());
     this.initializePitState();
     this.onMessage("input", (client, payload) => this.enqueueInput(client, payload));
@@ -213,7 +215,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.sendSeatResult(client, { accepted: false, reason: "chain_confirmation_unavailable" });
       return;
     }
-    if (confirmation.matchAddress !== this.activeMatchAddress || seat.pitId !== "wall-street-01") {
+    const matchChanged = confirmation.matchAddress !== this.activeMatchAddress;
+    const activeOnchainMatch = matchChanged && seat.pitId === "wall-street-01"
+      ? await this.membershipReader.isActiveMatch(seat.pitId, confirmation.matchAddress)
+      : true;
+    if (seat.pitId !== "wall-street-01" || !activeOnchainMatch) {
       this.releaseSeat(client);
       this.sendSeatResult(client, { accepted: false, reason: "chain_match_mismatch" });
       return;
@@ -228,6 +234,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.releaseSeat(client);
       this.sendSeatResult(client, { accepted: false, reason: "chain_membership_not_found" });
       return;
+    }
+
+    if (matchChanged) {
+      this.activeMatchAddress = confirmation.matchAddress;
+      const pitState = this.state.pits.get("wall-street-01");
+      if (pitState) pitState.activeMatchId = confirmation.matchAddress;
     }
 
     if (seat.status === "RESERVED") this.seating.beginConfirmation(client.sessionId);

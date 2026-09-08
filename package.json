@@ -2,6 +2,11 @@
   "name": "outcry",
   "private": true,
   "packageManager": "pnpm@10.14.0",
+  "pnpm": {
+    "overrides": {
+      "jito-ts>@solana/web3.js": "1.98.4"
+    }
+  },
   "scripts": {
     "lint": "node tools/lint.mjs",
     "typecheck": "pnpm --recursive --if-present typecheck",

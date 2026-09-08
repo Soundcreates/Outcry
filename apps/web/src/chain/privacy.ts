@@ -19,6 +19,7 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
+import { createBaseRpcConnection } from "./baseRpc";
 import outcryIdl from "./idl/outcry.json";
 
 export const PRIVATE_EXECUTOR = "PER_EXECUTOR" as const;
@@ -56,6 +57,9 @@ const PRIVATE_QUOTE_DISCRIMINATOR = Uint8Array.from(outcryIdl.accounts.find((acc
 const INITIALIZE_PRIVATE_INVENTORY_DISCRIMINATOR = instructionDiscriminator("initialize_private_inventory");
 const DELEGATE_PRIVATE_INVENTORY_DISCRIMINATOR = instructionDiscriminator("delegate_private_inventory");
 const INIT_PRIVATE_INVENTORY_PERMISSION_DISCRIMINATOR = instructionDiscriminator("init_private_inventory_permission");
+const INITIALIZE_PRIVATE_QUOTE_DISCRIMINATOR = instructionDiscriminator("initialize_private_quote");
+const DELEGATE_PRIVATE_QUOTE_DISCRIMINATOR = instructionDiscriminator("delegate_private_quote");
+const INIT_PRIVATE_QUOTE_PERMISSION_DISCRIMINATOR = instructionDiscriminator("init_private_quote_permission");
 
 // MagicBlock's documented Devnet TEE validator for devnet-tee.magicblock.app.
 const DEVNET_TEE_VALIDATOR = new PublicKey("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo");
@@ -172,7 +176,7 @@ export async function ensureTeeFeePayer(input: {
   if (!input.wallet.publicKey?.equals(input.player)) throw new Error("tee_fee_payer_wallet_mismatch");
 
   const feePayer = loadTeeFeePayer(`${TEE_FEE_PAYER_STORAGE_PREFIX}${input.teeRpcUrl}:${programId.toBase58()}`);
-  const baseConnection = new Connection(input.baseRpcUrl, "confirmed");
+  const baseConnection = createBaseRpcConnection(input.baseRpcUrl);
   let account = await baseConnection.getAccountInfo(feePayer.publicKey, "confirmed");
 
   if (!account) {
@@ -319,6 +323,162 @@ export function createInitializePrivateInventoryInstruction(input: {
   });
 }
 
+export function createInitializePrivateQuoteInstruction(input: {
+  matchAddress: PublicKey;
+  dealer: PublicKey;
+  round: number;
+  programId?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  const quote = privateQuotePda({ matchAddress: input.matchAddress, round: input.round, dealer: input.dealer, programId });
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: quote, isWritable: true, isSigner: false },
+      { pubkey: input.matchAddress, isWritable: false, isSigner: false },
+      { pubkey: input.dealer, isWritable: true, isSigner: true },
+      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+    ],
+    data: Buffer.from([...INITIALIZE_PRIVATE_QUOTE_DISCRIMINATOR, input.round]),
+  });
+}
+
+export function createDelegatePrivateQuoteInstruction(input: {
+  matchAddress: PublicKey;
+  dealer: PublicKey;
+  round: number;
+  validator: PublicKey;
+  programId?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  const quote = privateQuotePda({ matchAddress: input.matchAddress, round: input.round, dealer: input.dealer, programId });
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: input.dealer, isWritable: false, isSigner: true },
+      { pubkey: delegateBufferPdaFromDelegatedAccountAndOwnerProgram(quote, programId), isWritable: true, isSigner: false },
+      { pubkey: delegationRecordPdaFromDelegatedAccount(quote), isWritable: true, isSigner: false },
+      { pubkey: delegationMetadataPdaFromDelegatedAccount(quote), isWritable: true, isSigner: false },
+      { pubkey: quote, isWritable: true, isSigner: false },
+      { pubkey: input.validator, isWritable: false, isSigner: false },
+      { pubkey: programId, isWritable: false, isSigner: false },
+      { pubkey: DELEGATION_PROGRAM_ID, isWritable: false, isSigner: false },
+      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+    ],
+    data: Buffer.from([
+      ...DELEGATE_PRIVATE_QUOTE_DISCRIMINATOR,
+      ...input.matchAddress.toBytes(),
+      input.round,
+      ...input.dealer.toBytes(),
+    ]),
+  });
+}
+
+export function createInitPrivateQuotePermissionInstruction(input: {
+  matchAddress: PublicKey;
+  dealer: PublicKey;
+  round: number;
+  programId?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  const quote = privateQuotePda({ matchAddress: input.matchAddress, round: input.round, dealer: input.dealer, programId });
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: input.dealer, isWritable: false, isSigner: true },
+      { pubkey: quote, isWritable: true, isSigner: false },
+      { pubkey: privatePermissionPda(quote), isWritable: true, isSigner: false },
+      { pubkey: PERMISSION_PROGRAM_ID, isWritable: false, isSigner: false },
+      { pubkey: EPHEMERAL_VAULT_ID, isWritable: true, isSigner: false },
+      { pubkey: MAGIC_PROGRAM_ID, isWritable: false, isSigner: false },
+    ],
+    data: Buffer.from(INIT_PRIVATE_QUOTE_PERMISSION_DISCRIMINATOR),
+  });
+}
+
+export async function ensurePrivateQuote(input: {
+  baseRpcUrl: string;
+  teeRpcUrl: string;
+  matchAddress: PublicKey;
+  dealer: PublicKey;
+  round: number;
+  wallet: PrivateInventoryWallet;
+  programId?: PublicKey;
+  teeValidator?: PublicKey;
+}) {
+  const programId = input.programId ?? PROGRAM_ID;
+  if (!input.wallet.publicKey?.equals(input.dealer)) throw new Error("private_quote_wallet_mismatch");
+  if (!input.wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
+  const quote = privateQuotePda({ matchAddress: input.matchAddress, round: input.round, dealer: input.dealer, programId });
+  const baseConnection = createBaseRpcConnection(input.baseRpcUrl);
+  const baseQuote = await baseConnection.getAccountInfo(quote, "confirmed");
+  const validator = input.teeValidator ?? teeValidatorForRpc(input.teeRpcUrl);
+
+  if (!baseQuote) {
+    await sendWalletTransaction({
+      connection: baseConnection,
+      wallet: input.wallet,
+      payer: input.dealer,
+      label: "private_quote_setup",
+      instructions: [
+        createInitializePrivateQuoteInstruction({ matchAddress: input.matchAddress, dealer: input.dealer, round: input.round, programId }),
+        createDelegatePrivateQuoteInstruction({ matchAddress: input.matchAddress, dealer: input.dealer, round: input.round, validator, programId }),
+      ],
+    });
+  } else {
+    assertPrivateQuoteIdentity(baseQuote.data, input.matchAddress, input.dealer, input.round);
+    if (baseQuote.owner.equals(programId)) {
+      await sendWalletTransaction({
+        connection: baseConnection,
+        wallet: input.wallet,
+        payer: input.dealer,
+        label: "private_quote_delegation",
+        instructions: [createDelegatePrivateQuoteInstruction({
+          matchAddress: input.matchAddress,
+          dealer: input.dealer,
+          round: input.round,
+          validator,
+          programId,
+        })],
+      });
+    } else if (!baseQuote.owner.equals(DELEGATION_PROGRAM_ID)) {
+      throw new Error("private_quote_account_invalid");
+    }
+  }
+
+  let session = await createPrivateConnection({
+    teeRpcUrl: input.teeRpcUrl,
+    publicKey: input.dealer,
+    signMessage: async (message) => signedMessage(input.wallet, message),
+  });
+  const feePayer = await ensureTeeFeePayer({
+    baseRpcUrl: input.baseRpcUrl,
+    teeRpcUrl: input.teeRpcUrl,
+    teeConnection: session.connection,
+    player: input.dealer,
+    wallet: input.wallet,
+    programId,
+  });
+  await sendTeeTransaction({
+    connection: session.connection,
+    wallet: input.wallet,
+    feePayer,
+    label: "private_quote_permission",
+    instructions: [createInitPrivateQuotePermissionInstruction({
+      matchAddress: input.matchAddress,
+      dealer: input.dealer,
+      round: input.round,
+      programId,
+    })],
+  });
+  session = await createPrivateConnection({
+    teeRpcUrl: input.teeRpcUrl,
+    publicKey: input.dealer,
+    signMessage: async (message) => signedMessage(input.wallet, message),
+  });
+  return { connection: session.connection, feePayer };
+}
+
 export function createDelegatePrivateInventoryInstruction(input: {
   matchAddress: PublicKey;
   player: PublicKey;
@@ -358,7 +518,7 @@ export function createInitPrivateInventoryPermissionInstruction(input: {
   return new TransactionInstruction({
     programId,
     keys: [
-      { pubkey: input.player, isWritable: true, isSigner: true },
+      { pubkey: input.player, isWritable: false, isSigner: true },
       { pubkey: inventory, isWritable: true, isSigner: false },
       { pubkey: privatePermissionPda(inventory), isWritable: true, isSigner: false },
       { pubkey: PERMISSION_PROGRAM_ID, isWritable: false, isSigner: false },
@@ -382,7 +542,7 @@ export async function unlockPrivateInventory(input: {
   if (!input.wallet.publicKey?.equals(input.player)) throw new Error("private_inventory_wallet_mismatch");
   if (!input.wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
   const inventory = privateInventoryPda({ matchAddress: input.matchAddress, player: input.player, programId });
-  const baseConnection = new Connection(input.baseRpcUrl, "confirmed");
+  const baseConnection = createBaseRpcConnection(input.baseRpcUrl);
   const baseInventory = await baseConnection.getAccountInfo(inventory, "confirmed");
   let delegatedNow = false;
 
@@ -495,6 +655,15 @@ function assertPrivateInventoryIdentity(data: Uint8Array, matchAddress: PublicKe
   }
 }
 
+function assertPrivateQuoteIdentity(data: Uint8Array, matchAddress: PublicKey, dealer: PublicKey, round: number) {
+  if (data.length < 91 || !sameBytes(data.slice(0, 8), PRIVATE_QUOTE_DISCRIMINATOR)
+    || !new PublicKey(data.slice(8, 40)).equals(matchAddress)
+    || data[40] !== round
+    || !new PublicKey(data.slice(41, 73)).equals(dealer)) {
+    throw new Error("private_quote_account_invalid");
+  }
+}
+
 async function initializePrivateInventoryPermission(input: {
   connection: Connection;
   wallet: PrivateInventoryWallet;
@@ -512,7 +681,7 @@ async function initializePrivateInventoryPermission(input: {
   });
 }
 
-async function sendTeeTransaction(input: {
+export async function sendTeeTransaction(input: {
   connection: Connection;
   wallet: PrivateInventoryWallet;
   feePayer: Keypair;

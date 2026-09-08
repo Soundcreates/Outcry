@@ -4,7 +4,7 @@ export const DEFAULT_DEVNET_RPC = "https://api.devnet.solana.com";
 export const MAGICBLOCK_PYTH_ORACLE_PROGRAM_ID = new PublicKey("PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd");
 export const MAGICBLOCK_PYTH_SOL_USD_FEED = new PublicKey("ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu");
 export const MAGICBLOCK_PYTH_SOL_USD_FEED_ID = Uint8Array.from(
-  "c6ad3e841d9c0f248adff90cf776f839fd59f1cbd8ffbc8f9402883ea16e8420".match(/../g).map((value) => Number.parseInt(value, 16)),
+  "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d".match(/../g).map((value) => Number.parseInt(value, 16)),
 );
 
 export function resolveBaseRpcUrl() {

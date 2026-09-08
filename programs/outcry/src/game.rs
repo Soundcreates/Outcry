@@ -8,7 +8,7 @@ pub const DEFAULT_MAX_DEVIATION_BPS: u64 = 500;
 // The local harness snapshots one immutable oracle account before a long run.
 pub const DEFAULT_ORACLE_MAX_AGE_SECONDS: i64 = 86_400;
 #[cfg(not(feature = "localnet"))]
-pub const DEFAULT_ORACLE_MAX_AGE_SECONDS: i64 = 10;
+pub const DEFAULT_ORACLE_MAX_AGE_SECONDS: i64 = 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuoteCandidate {

@@ -14,6 +14,8 @@ const MATCH_LEGACY_SEATS_OFFSET = 211;
 const MATCH_CURRENT_PLAYERS_OFFSET = 84;
 const MATCH_CURRENT_SEATS_OFFSET = 212;
 const MAX_PLAYERS = 4;
+const PIT_ACTIVE_MATCH_OFFSET = 73;
+const PIT_SEED = Buffer.from("pit");
 const MEMBERSHIP_READ_ATTEMPTS = 4;
 const MEMBERSHIP_READ_DELAY_MS = 250;
 
@@ -26,6 +28,8 @@ export type MatchMembershipRequest = {
 export type MatchMembershipReader = {
   isMatchReady(matchAddress: string): Promise<boolean>;
   isConfirmed(input: MatchMembershipRequest): Promise<boolean>;
+  isActiveMatch(pitId: string, matchAddress: string): Promise<boolean>;
+  readActiveMatch(pitId: string): Promise<string | undefined>;
 };
 
 export function isValidMatchAccount(
@@ -52,13 +56,34 @@ export class SolanaMatchMembershipReader implements MatchMembershipReader {
   private readonly programId: PublicKey;
 
   constructor(rpcUrl: string, programId: string) {
-    this.connection = new Connection(rpcUrl, "confirmed");
+    this.connection = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true });
     this.programId = new PublicKey(programId);
   }
 
   async isMatchReady(matchAddress: string) {
     const account = await this.readValidMatchAccount(matchAddress);
     return Boolean(account);
+  }
+
+  async isActiveMatch(pitId: string, matchAddress: string) {
+    const active = await this.readActiveMatch(pitId);
+    return active === matchAddress;
+  }
+
+  async readActiveMatch(pitId: string) {
+    const encoded = Buffer.from(pitId, "utf8");
+    if (encoded.length === 0 || encoded.length > 32) return undefined;
+    const pitIdBytes = Buffer.alloc(32);
+    encoded.copy(pitIdBytes);
+    const [pitAddress] = PublicKey.findProgramAddressSync([PIT_SEED, pitIdBytes], this.programId);
+    try {
+      const account = await this.connection.getAccountInfo(pitAddress, "confirmed");
+      if (!account || !account.owner.equals(this.programId) || account.data.length < PIT_ACTIVE_MATCH_OFFSET + 32) return undefined;
+      const active = new PublicKey(account.data.subarray(PIT_ACTIVE_MATCH_OFFSET, PIT_ACTIVE_MATCH_OFFSET + 32));
+      return active.equals(PublicKey.default) ? undefined : active.toBase58();
+    } catch {
+      return undefined;
+    }
   }
 
   async isConfirmed(input: MatchMembershipRequest) {

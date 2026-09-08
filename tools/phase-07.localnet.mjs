@@ -29,7 +29,7 @@ const idl = JSON.parse(await readFile("target/idl/outcry.json", "utf8"));
 const programId = new PublicKey(idl.address);
 const systemProgram = SystemProgram.programId;
 const oracleFeed = new PublicKey("ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu");
-const oracleFeedId = Buffer.from("c6ad3e841d9c0f248adff90cf776f839fd59f1cbd8ffbc8f9402883ea16e8420", "hex");
+const oracleFeedId = Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex");
 
 assert.ok(Number.isInteger(matchesToRun) && matchesToRun > 0, "OUTCRY_PHASE7_MATCHES must be positive");
 

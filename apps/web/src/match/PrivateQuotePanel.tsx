@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { baseRpcConfigurationMessage, browserBaseRpc } from "../chain/baseRpc";
 import { submitPrivateQuoteOnchain } from "../chain/matchActions";
 
 type Props = {
@@ -10,7 +11,6 @@ type Props = {
 };
 
 const teeRpc = import.meta.env.VITE_MAGICBLOCK_TEE_RPC || import.meta.env.NEXT_PUBLIC_MAGICBLOCK_TEE_RPC || "";
-const baseRpc = import.meta.env.VITE_SOLANA_BASE_RPC || "https://api.devnet.solana.com";
 
 export default function PrivateQuotePanel({ active, matchAddress, dealerAddress, round, programId }: Props) {
   const [price, setPrice] = useState("");
@@ -23,11 +23,12 @@ export default function PrivateQuotePanel({ active, matchAddress, dealerAddress,
     const priceE6 = Number(price);
     if (!matchAddress || !dealerAddress || round === undefined) return setError("private_round_unavailable");
     if (!teeRpc) return setError("tee_rpc_unconfigured");
+    if (!browserBaseRpc.url) return setError(baseRpcConfigurationMessage(browserBaseRpc.error));
     if (!Number.isSafeInteger(priceE6) || priceE6 <= 0) return setError("enter_positive_price_e6");
     setStatus("submitting");
     setError("");
     try {
-      await submitPrivateQuoteOnchain({ baseRpcUrl: baseRpc, teeRpcUrl: teeRpc, matchAddress, dealerAddress, round, priceE6, programId });
+      await submitPrivateQuoteOnchain({ baseRpcUrl: browserBaseRpc.url, teeRpcUrl: teeRpc, matchAddress, dealerAddress, round, priceE6, programId });
       setStatus("submitted");
     } catch (reason) {
       setStatus("error");

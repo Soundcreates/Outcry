@@ -8,6 +8,7 @@ type Props = {
   sessionId?: string;
   onConfirm?: (intent: TradeIntent) => void;
   onSubmit?: (intent: TradeIntent) => Promise<void>;
+  submissionStatus?: string;
 };
 
 const worldHttp = import.meta.env.VITE_WORLD_HTTP ||
@@ -28,7 +29,16 @@ function speechError(reason: unknown) {
   return "Groq speech transcription failed; use typed fallback and try again.";
 }
 
-export default function TradeIntentPanel({ active, matchId, role = "PLAYER", sessionId, onConfirm, onSubmit }: Props) {
+function rfqError(reason: unknown) {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  if (/pyth_not_configured/i.test(detail)) return "Pyth price updates are not configured on the world server.";
+  if (/pyth_rate_limited|rfq_base_rpc_rate_limited|429|too many requests/i.test(detail)) return "Price or Base RPC is rate-limiting this RFQ. Wait a moment, then retry.";
+  if (/rfq_pyth_build_failed.*process is not defined/i.test(detail)) return "Pyth's browser SDK did not initialize. Restart the web app, then retry the RFQ.";
+  if (/rfq_pyth_(build|simulation|wallet|confirmation)_failed/i.test(detail)) return "The verified price update could not be posted. Retry the RFQ and approve each wallet prompt.";
+  return detail || "rfq_submit_failed";
+}
+
+export default function TradeIntentPanel({ active, matchId, role = "PLAYER", sessionId, onConfirm, onSubmit, submissionStatus }: Props) {
   const recorderRef = useRef<MediaRecorder | undefined>(undefined);
   const streamRef = useRef<MediaStream | undefined>(undefined);
   const chunksRef = useRef<Blob[]>([]);
@@ -175,7 +185,7 @@ export default function TradeIntentPanel({ active, matchId, role = "PLAYER", ses
       await onSubmit(draft);
       setSubmitted(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "rfq_submit_failed");
+      setError(rfqError(reason));
     } finally {
       setSubmitting(false);
     }
@@ -202,6 +212,7 @@ export default function TradeIntentPanel({ active, matchId, role = "PLAYER", ses
         </form>
       </div>
       {transcript && <p className="trade-transcript">Transcript: “{transcript}”</p>}
+      {submitting && submissionStatus && <p className="trade-transcript" role="status">{submissionStatus}</p>}
       {error && <p className="trade-intent-error" role="alert">{error}</p>}
       {draft && (
         <div className="trade-confirmation">

@@ -17,6 +17,7 @@
     "@livekit/components-react": "2.9.24",
     "@magicblock-labs/ephemeral-rollups-sdk": "0.17.0",
     "@outcry/shared": "file:../../packages/shared",
+    "@pythnetwork/pyth-solana-receiver": "^0.16.0",
     "@solana/web3.js": "1.98.4",
     "buffer": "6.0.3",
     "livekit-client": "2.22.0",

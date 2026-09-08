@@ -3,6 +3,7 @@ import { matchMaker, Server } from "colyseus";
 import { readServerEnv } from "@outcry/shared/env";
 import { mintLiveKitToken, parseLiveKitTokenRequest } from "./media/livekit";
 import { GroqTranscriptionError, transcribeWithGroq } from "./media/groq";
+import { fetchLatestPythPriceUpdates, PythPriceUpdateError } from "./media/pyth";
 import { WorldRoom } from "./world/WorldRoom";
 
 const env = readServerEnv();
@@ -104,6 +105,35 @@ const gameServer = new Server({
         }
       },
     );
+    app.get("/api/oracle/sol-usd-update", async (request: Request, response: Response) => {
+      const sessionId = request.header("x-outcry-session-id");
+      const matchId = request.header("x-outcry-match-id");
+      if (!sessionId || !matchId || !WorldRoom.isActiveSession(sessionId)) {
+        response.status(403).json({ error: "inactive_world_session" });
+        return;
+      }
+      if (!WorldRoom.isKnownPitId(matchId) || !WorldRoom.canJoinMedia(sessionId, matchId)) {
+        response.status(403).json({ error: "seat_membership_required" });
+        return;
+      }
+      if (!env.PYTH_HERMES_URL || !env.PYTH_API_KEY) {
+        response.status(503).json({ error: "pyth_not_configured" });
+        return;
+      }
+      try {
+        const updates = await fetchLatestPythPriceUpdates({
+          endpoint: env.PYTH_HERMES_URL,
+          apiKey: env.PYTH_API_KEY,
+        });
+        response.status(200).json({ updates });
+      } catch (reason) {
+        if (reason instanceof PythPriceUpdateError) {
+          response.status(reason.status).json({ error: reason.code });
+          return;
+        }
+        response.status(502).json({ error: "pyth_upstream_failed" });
+      }
+    });
   },
 });
 gameServer.define("world", WorldRoom);
