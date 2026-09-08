@@ -1,0 +1,69 @@
+{
+  "compressionlevel": -1,
+  "height": 15,
+  "infinite": false,
+  "layers": [
+    { "id": 1, "name": "ground", "type": "objectgroup", "objects": [] },
+    { "id": 2, "name": "floor_decor", "type": "objectgroup", "objects": [] },
+    { "id": 3, "name": "furniture", "type": "objectgroup", "objects": [] },
+    {
+      "id": 4,
+      "name": "collision",
+      "type": "objectgroup",
+      "objects": [
+        { "id": 1, "name": "north_buildings", "type": "Collision", "x": 0, "y": 0, "width": 640, "height": 96 },
+        { "id": 2, "name": "south_buildings", "type": "Collision", "x": 0, "y": 448, "width": 640, "height": 32 },
+        { "id": 3, "name": "west_buildings", "type": "Collision", "x": 0, "y": 0, "width": 32, "height": 480 },
+        { "id": 4, "name": "east_buildings", "type": "Collision", "x": 608, "y": 0, "width": 32, "height": 480 },
+        { "id": 5, "name": "west_storefront", "type": "Collision", "x": 32, "y": 96, "width": 64, "height": 64 },
+        { "id": 6, "name": "east_storefront", "type": "Collision", "x": 544, "y": 96, "width": 64, "height": 64 },
+        { "id": 7, "name": "west_lower_planting", "type": "Collision", "x": 32, "y": 384, "width": 96, "height": 64 },
+        { "id": 8, "name": "east_lower_planting", "type": "Collision", "x": 512, "y": 384, "width": 96, "height": 64 }
+      ]
+    },
+    { "id": 5, "name": "above_player", "type": "objectgroup", "objects": [] },
+    {
+      "id": 6,
+      "name": "objects_spawn",
+      "type": "objectgroup",
+      "objects": [{ "id": 9, "name": "shibuya_spawn", "type": "Spawn", "class": "Spawn", "x": 320, "y": 416, "width": 0, "height": 0, "properties": [{ "name": "spawnId", "type": "string", "value": "main" }] }]
+    },
+    {
+      "id": 7,
+      "name": "objects_pits",
+      "type": "objectgroup",
+      "objects": [
+        { "id": 10, "name": "pit_shibuya_crossing_01", "type": "Pit", "class": "Pit", "x": 72, "y": 160, "width": 176, "height": 176, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-01" }, { "name": "capacity", "type": "int", "value": 4 }, { "name": "interactionRadius", "type": "int", "value": 48 }, { "name": "minPlayers", "type": "int", "value": 1 }] },
+        { "id": 11, "name": "pit_shibuya_crossing_02", "type": "Pit", "class": "Pit", "x": 392, "y": 160, "width": 176, "height": 176, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-02" }, { "name": "capacity", "type": "int", "value": 4 }, { "name": "interactionRadius", "type": "int", "value": 48 }, { "name": "minPlayers", "type": "int", "value": 1 }] }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "objects_seats",
+      "type": "objectgroup",
+      "objects": [
+        { "id": 12, "name": "pit_01_seat_0", "type": "PitSeat", "class": "PitSeat", "x": 112, "y": 136, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-01" }, { "name": "seatIndex", "type": "int", "value": 0 }, { "name": "facing", "type": "string", "value": "south" }] },
+        { "id": 13, "name": "pit_01_seat_1", "type": "PitSeat", "class": "PitSeat", "x": 208, "y": 136, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-01" }, { "name": "seatIndex", "type": "int", "value": 1 }, { "name": "facing", "type": "string", "value": "south" }] },
+        { "id": 14, "name": "pit_01_seat_2", "type": "PitSeat", "class": "PitSeat", "x": 160, "y": 360, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-01" }, { "name": "seatIndex", "type": "int", "value": 2 }, { "name": "facing", "type": "string", "value": "north" }] },
+        { "id": 15, "name": "pit_01_seat_3", "type": "PitSeat", "class": "PitSeat", "x": 208, "y": 360, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-01" }, { "name": "seatIndex", "type": "int", "value": 3 }, { "name": "facing", "type": "string", "value": "north" }] },
+        { "id": 16, "name": "pit_02_seat_0", "type": "PitSeat", "class": "PitSeat", "x": 432, "y": 136, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-02" }, { "name": "seatIndex", "type": "int", "value": 0 }, { "name": "facing", "type": "string", "value": "south" }] },
+        { "id": 17, "name": "pit_02_seat_1", "type": "PitSeat", "class": "PitSeat", "x": 528, "y": 136, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-02" }, { "name": "seatIndex", "type": "int", "value": 1 }, { "name": "facing", "type": "string", "value": "south" }] },
+        { "id": 18, "name": "pit_02_seat_2", "type": "PitSeat", "class": "PitSeat", "x": 432, "y": 360, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-02" }, { "name": "seatIndex", "type": "int", "value": 2 }, { "name": "facing", "type": "string", "value": "north" }] },
+        { "id": 19, "name": "pit_02_seat_3", "type": "PitSeat", "class": "PitSeat", "x": 480, "y": 360, "width": 0, "height": 0, "properties": [{ "name": "pitId", "type": "string", "value": "shibuya-crossing-02" }, { "name": "seatIndex", "type": "int", "value": 3 }, { "name": "facing", "type": "string", "value": "north" }] }
+      ]
+    },
+    { "id": 9, "name": "objects_portals", "type": "objectgroup", "objects": [] },
+    { "id": 10, "name": "objects_decor", "type": "objectgroup", "objects": [] }
+  ],
+  "nextlayerid": 11,
+  "nextobjectid": 20,
+  "orientation": "orthogonal",
+  "renderorder": "right-down",
+  "tileheight": 32,
+  "tilesets": [{ "columns": 1, "firstgid": 1, "image": "assets/background.png", "imageheight": 1086, "imagewidth": 1448, "margin": 0, "name": "shibuya-crossing-metadata", "spacing": 0, "tilecount": 1, "tileheight": 32, "tilewidth": 32 }],
+  "tilewidth": 32,
+  "type": "map",
+  "version": "1.10",
+  "tiledversion": "1.10.2",
+  "width": 20
+}

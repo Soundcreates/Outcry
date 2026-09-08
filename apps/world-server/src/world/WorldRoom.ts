@@ -23,12 +23,21 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   // ponytail: process-local presence count; use shared storage when the server is horizontally scaled.
   private static readonly activeSessions = new Set<string>();
   private static readonly seatedSessions = new Map<string, { pitId: string; seatIndex: number }>();
-  private static readonly knownWorldIds = new Set(["wall-street", "tokyo-night"]);
+  private static readonly knownWorldIds = new Set([
+    "wall-street",
+    "tokyo-night",
+    "shibuya-crossing",
+    "kyoto-lanterns",
+  ]);
   private static readonly knownPitIds = new Set([
     "wall-street-01",
     "wall-street-02",
     "tokyo-night-01",
     "tokyo-night-02",
+    "shibuya-crossing-01",
+    "shibuya-crossing-02",
+    "kyoto-lanterns-01",
+    "kyoto-lanterns-02",
   ]);
   private geometry!: WorldGeometry;
   private seating!: SeatLeaseManager;

@@ -32,6 +32,8 @@ const gameServer = new Server({
           worlds: [
             { id: "wall-street", name: "Wall Street", mapUrl: "/wall-street/world.tmj", online: WorldRoom.onlineCount(), activePits: 2 },
             { id: "tokyo-night", name: "Tokyo Night", mapUrl: "/tokyo-night/world.tmj", online: 0, activePits: 2 },
+            { id: "shibuya-crossing", name: "Shibuya Crossing", mapUrl: "/shibuya-crossing/world.tmj", online: 0, activePits: 2 },
+            { id: "kyoto-lanterns", name: "Kyoto Lanterns", mapUrl: "/kyoto-lanterns/world.tmj", online: 0, activePits: 2 },
           ],
         });
       },

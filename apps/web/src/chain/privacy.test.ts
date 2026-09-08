@@ -176,6 +176,8 @@ assert.match(privateInventoryPanelSource, /browserBaseRpc/);
 assert.match(privateQuotePanelSource, /browserBaseRpc/);
 assert.match(privateInventoryPanelSource, /wallet\.signTransaction/);
 assert.match(privacySource, /ensureTeeFeePayer/);
+assert.match(privacySource, /waitForPrivateQuoteOnTee/);
+assert.match(privacySource, /permissionInfo\?\.lamports/);
 assert.match(privacySource, /feePayer: input\.feePayer/);
 
 console.log("privacy boundary: 800 matrix assertions + Alice/Bob/spectator attack denials + TEE fail-closed/retry boundary pass");

@@ -12,6 +12,7 @@ export type PythSimulationDiagnostics = {
   transactionCount?: number;
   failedInstructionIndex?: number;
   failingProgramId?: string;
+  instructionProgramIds: string[];
   err: unknown;
   logs: string[];
   unitsConsumed?: number | null;
@@ -33,9 +34,14 @@ function errorDetail(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-function failedInstructionIndex(err: unknown) {
-  if (!Array.isArray(err) || err[0] !== "InstructionError" || !Array.isArray(err[1])) return undefined;
-  return typeof err[1][0] === "number" ? err[1][0] : undefined;
+export function parsePythInstructionError(err: unknown): { index: number; details: unknown } | undefined {
+  const value = Array.isArray(err)
+    ? err[0] === "InstructionError" ? err[1] : undefined
+    : err && typeof err === "object"
+      ? (err as { InstructionError?: unknown }).InstructionError
+      : undefined;
+  if (!Array.isArray(value) || typeof value[0] !== "number") return undefined;
+  return { index: value[0], details: value[1] };
 }
 
 function simulationDiagnostics(
@@ -44,17 +50,20 @@ function simulationDiagnostics(
   transactionIndex?: number,
   transactionCount?: number,
 ): PythSimulationDiagnostics {
-  const failedIndex = failedInstructionIndex(value.err);
-  const instruction = failedIndex === undefined
+  const failure = parsePythInstructionError(value.err);
+  const instruction = failure === undefined
     ? undefined
-    : transaction.message.compiledInstructions[failedIndex];
+    : transaction.message.compiledInstructions[failure.index];
   return {
     transactionIndex,
     transactionCount,
-    failedInstructionIndex: failedIndex,
+    failedInstructionIndex: failure?.index,
     failingProgramId: instruction
       ? transaction.message.staticAccountKeys[instruction.programIdIndex]?.toBase58()
       : undefined,
+    instructionProgramIds: transaction.message.compiledInstructions.map((compiledInstruction) =>
+      transaction.message.staticAccountKeys[compiledInstruction.programIdIndex]?.toBase58() ?? "unknown",
+    ),
     err: value.err,
     logs: value.logs ?? [],
     unitsConsumed: value.unitsConsumed,
@@ -147,7 +156,11 @@ export async function postPythPriceAndConsume(input: {
     await builder.addPostPriceUpdates(input.priceUpdates);
     await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount) => input.createConsumerInstructions(getPriceUpdateAccount(feedId))
       .map((instruction): InstructionWithEphemeralSigners => ({ instruction, signers: [] })));
-    const transactions = await builder.buildVersionedTransactions({ tightComputeBudget: true });
+    // Let the SDK preserve its per-instruction compute metadata and Solana's
+    // default allocation for our consumer instructions. The consumer entries
+    // do not provide a tight-compute estimate, so forcing one here can cap the
+    // OUTCRY instruction sequence below what it needs.
+    const transactions = await builder.buildVersionedTransactions({});
     if (transactions.length === 0) throw new PythSubmissionError("build", "transaction_missing");
     const signatures: string[] = [];
     for (let index = 0; index < transactions.length; index += 1) {

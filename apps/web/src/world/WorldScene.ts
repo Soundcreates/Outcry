@@ -61,6 +61,7 @@ export class WorldScene extends Phaser.Scene {
   private readonly room?: WorldRoom;
   private readonly callbacks: WorldSceneCallbacks;
   private readonly mapSlug: string;
+  private readonly usesRasterBackground: boolean;
   private player?: Phaser.Physics.Arcade.Sprite;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd?: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
@@ -79,13 +80,14 @@ export class WorldScene extends Phaser.Scene {
     super({ key: "WorldScene" });
     this.worldId = worldId;
     this.mapSlug = worldId;
+    this.usesRasterBackground = this.mapSlug !== "wall-street";
     this.room = room;
     this.callbacks = callbacks;
   }
 
   preload() {
     this.load.tilemapTiledJSON("world", `/${this.mapSlug}/world.tmj`);
-    if (this.mapSlug === "tokyo-night") {
+    if (this.usesRasterBackground) {
       this.load.image("world-background", `/${this.mapSlug}/assets/background.png`);
     } else {
       this.load.image("outcry-floor", `/${this.mapSlug}/assets/floor.svg`);
@@ -100,7 +102,7 @@ export class WorldScene extends Phaser.Scene {
 
   create() {
     const map = this.make.tilemap({ key: "world" });
-    if (this.mapSlug === "tokyo-night") {
+    if (this.usesRasterBackground) {
       this.add
         .image(map.widthInPixels / 2, map.heightInPixels / 2, "world-background")
         .setOrigin(0.5)
@@ -208,7 +210,7 @@ export class WorldScene extends Phaser.Scene {
       this.room.onMessage("seat", (result) => this.handleSeatResult(result));
       this.syncServerState(this.room.state);
     }
-    if (this.mapSlug !== "tokyo-night") {
+    if (!this.usesRasterBackground) {
       const tileset = map.addTilesetImage("outcry-floor", "outcry-floor");
       if (tileset) map.createLayer("above_player", tileset, 0, 0);
     }

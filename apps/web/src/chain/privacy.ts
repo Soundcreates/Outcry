@@ -459,23 +459,35 @@ export async function ensurePrivateQuote(input: {
     wallet: input.wallet,
     programId,
   });
-  await sendTeeTransaction({
+  await waitForPrivateQuoteOnTee({
     connection: session.connection,
-    wallet: input.wallet,
-    feePayer,
-    label: "private_quote_permission",
-    instructions: [createInitPrivateQuotePermissionInstruction({
-      matchAddress: input.matchAddress,
-      dealer: input.dealer,
-      round: input.round,
-      programId,
-    })],
+    quote,
+    matchAddress: input.matchAddress,
+    dealer: input.dealer,
+    round: input.round,
+    programId,
   });
-  session = await createPrivateConnection({
-    teeRpcUrl: input.teeRpcUrl,
-    publicKey: input.dealer,
-    signMessage: async (message) => signedMessage(input.wallet, message),
-  });
+  const permission = privatePermissionPda(quote);
+  const permissionInfo = await session.connection.getAccountInfo(permission, "confirmed");
+  if (!permissionInfo?.lamports) {
+    await sendTeeTransaction({
+      connection: session.connection,
+      wallet: input.wallet,
+      feePayer,
+      label: "private_quote_permission",
+      instructions: [createInitPrivateQuotePermissionInstruction({
+        matchAddress: input.matchAddress,
+        dealer: input.dealer,
+        round: input.round,
+        programId,
+      })],
+    });
+    session = await createPrivateConnection({
+      teeRpcUrl: input.teeRpcUrl,
+      publicKey: input.dealer,
+      signMessage: async (message) => signedMessage(input.wallet, message),
+    });
+  }
   return { connection: session.connection, feePayer };
 }
 
@@ -664,6 +676,38 @@ function assertPrivateQuoteIdentity(data: Uint8Array, matchAddress: PublicKey, d
   }
 }
 
+async function waitForPrivateQuoteOnTee(input: {
+  connection: Connection;
+  quote: PublicKey;
+  matchAddress: PublicKey;
+  dealer: PublicKey;
+  round: number;
+  programId: PublicKey;
+}) {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const info = await input.connection.getAccountInfo(input.quote, "confirmed");
+    if (info) {
+      try {
+        assertPrivateAccount({
+          data: info.data,
+          owner: info.owner,
+          programId: input.programId,
+          discriminator: PRIVATE_QUOTE_DISCRIMINATOR,
+          length: 91,
+          label: "private_quote",
+        });
+        assertPrivateQuoteIdentity(info.data, input.matchAddress, input.dealer, input.round);
+        return;
+      } catch (reason) {
+        lastError = reason instanceof Error ? reason : new Error("private_quote_account_invalid");
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`private_quote_tee_unavailable${lastError ? `: ${lastError.message}` : ""}`);
+}
+
 async function initializePrivateInventoryPermission(input: {
   connection: Connection;
   wallet: PrivateInventoryWallet;
@@ -698,8 +742,7 @@ export async function sendTeeTransaction(input: {
     transaction.partialSign(input.feePayer);
     const simulation = await input.connection.simulateTransaction(transaction);
     if (simulation.value.err) {
-      const relevantLog = simulation.value.logs?.find((log) => /Error|failed|constraint|missing|insufficient/i.test(log));
-      throw new Error(`${input.label}_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
+      throw new Error(`${input.label}_simulation_failed: err=${JSON.stringify(simulation.value.err)} units=${simulation.value.unitsConsumed ?? "unknown"} logs=${JSON.stringify(simulation.value.logs ?? [])}`);
     }
     try {
       const signed = await input.wallet.signTransaction(transaction);

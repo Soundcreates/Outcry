@@ -591,6 +591,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
               matchAddress={matchAddress}
               dealerAddress={walletAddress}
               round={matchSnapshot?.currentRound}
+              deadlineAt={matchSnapshot?.deadlineAt}
               programId={programId}
             />
             <TradeIntentPanel

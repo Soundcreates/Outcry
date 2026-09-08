@@ -7,12 +7,13 @@ type Props = {
   matchAddress?: string;
   dealerAddress?: string;
   round?: number;
+  deadlineAt?: number;
   programId: string;
 };
 
 const teeRpc = import.meta.env.VITE_MAGICBLOCK_TEE_RPC || import.meta.env.NEXT_PUBLIC_MAGICBLOCK_TEE_RPC || "";
 
-export default function PrivateQuotePanel({ active, matchAddress, dealerAddress, round, programId }: Props) {
+export default function PrivateQuotePanel({ active, matchAddress, dealerAddress, round, deadlineAt, programId }: Props) {
   const [price, setPrice] = useState("");
   const [status, setStatus] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
   const [error, setError] = useState("");
@@ -25,6 +26,7 @@ export default function PrivateQuotePanel({ active, matchAddress, dealerAddress,
     if (!teeRpc) return setError("tee_rpc_unconfigured");
     if (!browserBaseRpc.url) return setError(baseRpcConfigurationMessage(browserBaseRpc.error));
     if (!Number.isSafeInteger(priceE6) || priceE6 <= 0) return setError("enter_positive_price_e6");
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) return setError("quote_deadline_passed_start_new_rfq");
     setStatus("submitting");
     setError("");
     try {

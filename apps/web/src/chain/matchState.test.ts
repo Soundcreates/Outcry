@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import outcryIdl from "./idl/outcry.json";
-import { createInitializeOracleInstruction, createMigrateLegacyMatchInstruction, createNextRoundInstruction, createOpenRfqInstruction, createResolveRoundInstruction, createSettleMatchInstruction, createStartMatchInstruction, createSubmitQuoteInstruction, createUndelegateOracleInstruction, createUndelegateRoundInstruction, waitForRfqExecutionState } from "./matchActions";
+import { createInitializeOracleInstruction, createMigrateLegacyMatchInstruction, createNextRoundInstruction, createOpenRfqInstruction, createResolveRoundInstruction, createSettleMatchInstruction, createStartMatchInstruction, createSubmitQuoteInstruction, createUndelegateOracleInstruction, createUndelegateRoundInstruction, DEFAULT_QUOTE_WINDOW_SECONDS, waitForRfqExecutionState } from "./matchActions";
 import { baseRpcConfigurationMessage, parseBrowserBaseRpc } from "./baseRpc";
 import { decodePublicMatchAccount, escrowPda, loadPublicMatchState, oraclePda, resultPda, roundPda } from "./matchState";
 import { privateInventoryPda } from "./privacy";
@@ -82,6 +82,8 @@ assert.equal(initializeOracleInstruction.keys[1]?.pubkey.toBase58(), players[1].
 assert.equal(initializeOracleInstruction.keys[2]?.pubkey.toBase58(), players[0].toBase58());
 assert.equal(initializeOracleInstruction.keys[2]?.isSigner, true);
 assert.equal(instruction.data.length, 25);
+assert.equal(DEFAULT_QUOTE_WINDOW_SECONDS, 30);
+assert.equal(new DataView(instruction.data.buffer, instruction.data.byteOffset, instruction.data.byteLength).getBigInt64(17, true), 30n);
 assert.equal(instruction.keys[0]?.pubkey.toBase58(), match.toBase58());
 assert.equal(instruction.keys[0]?.isWritable, false);
 assert.equal(instruction.keys[3]?.pubkey.toBase58(), players[0].toBase58());

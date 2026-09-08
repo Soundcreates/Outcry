@@ -41,6 +41,7 @@ const UNDELEGATE_PRIVATE_INVENTORY_DISCRIMINATOR = Uint8Array.from(outcryIdl.ins
 const UNDELEGATE_ORACLE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "undelegate_oracle")?.discriminator ?? []);
 const NEXT_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "next_round")?.discriminator ?? []);
 const PROGRAM_ID = new PublicKey(outcryIdl.address);
+export const DEFAULT_QUOTE_WINDOW_SECONDS = 30;
 
 type AccountInfoConnection = Pick<Connection, "getMultipleAccountsInfo">;
 
@@ -396,7 +397,7 @@ export function createOpenRfqInstruction(input: {
   const programId = new PublicKey(input.programId ?? PROGRAM_ID);
   const match = new PublicKey(input.matchAddress);
   const player = new PublicKey(input.playerAddress);
-  const quoteWindowSeconds = input.quoteWindowSeconds ?? 10;
+  const quoteWindowSeconds = input.quoteWindowSeconds ?? DEFAULT_QUOTE_WINDOW_SECONDS;
   if (!Number.isInteger(quoteWindowSeconds) || quoteWindowSeconds < 1 || quoteWindowSeconds > 30) throw new Error("invalid_quote_window");
   return new TransactionInstruction({
     programId,
