@@ -21,6 +21,7 @@ type Props = {
   matchAddress?: string;
   chainConfirmed?: boolean;
   onChainConfirmed: (input: { matchAddress: string; walletAddress: string }) => void;
+  onWalletJoinStarted: () => void;
   onMatchAddressChanged?: (matchAddress: string) => void;
   onChainSeatConflict?: (input: { matchAddress: string; walletAddress: string }) => void;
   role: "PLAYER" | "SPECTATOR";
@@ -143,12 +144,12 @@ async function fetchSolUsdPriceUpdates(input: { matchId: string; sessionId: stri
   return payload.updates;
 }
 
-export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onChainConfirmed, onMatchAddressChanged, onChainSeatConflict, onExit, role, seatIndex, sessionId }: Props) {
+export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onChainConfirmed, onWalletJoinStarted, onMatchAddressChanged, onChainSeatConflict, onExit, role, seatIndex, sessionId }: Props) {
   const room = useMemo(() => new Room({ adaptiveStream: true, dynacast: true }), []);
   const matchConnection = useMemo(() => baseSolanaRpc ? createBaseRpcConnection(baseSolanaRpc) : undefined, []);
   // Match/RfqRound are public metadata. Private state remains on authenticated TEE connections.
   const teeMatchConnection = useMemo(() => new Connection(teeSolanaRpc, { commitment: "confirmed", disableRetryOnRateLimit: true }), []);
-  const [chainPhase, setChainPhase] = useState<"required" | "joining" | "confirmed" | "failed">(
+  const [chainPhase, setChainPhase] = useState<"required" | "joining" | "awaiting_confirmation" | "confirmed" | "failed">(
     role === "PLAYER" && matchAddress && !chainConfirmed ? "required" : "confirmed",
   );
   const [phase, setPhase] = useState<"connecting" | "connected" | "reconnecting" | "disconnected" | "error">("connecting");
@@ -178,6 +179,10 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
   const autoStartAttemptedRef = useRef(false);
   const walletAddress = connectedWalletAddress();
   const chainActionInFlight = startingMatch || preparingRound || settling || resolving || skippingRound || resumingSkippedRound || releasingStaleMatch || restoringMatch || submittingRfq || chainPhase === "joining";
+
+  useEffect(() => {
+    if (chainConfirmed) setChainPhase("confirmed");
+  }, [chainConfirmed]);
 
   useEffect(() => {
     let active = true;
@@ -444,6 +449,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     setChainPhase("joining");
     setError("");
     setActiveMatchToRelease(undefined);
+    onWalletJoinStarted();
     try {
       let result;
       try {
@@ -468,7 +474,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       } else {
         onChainConfirmed({ matchAddress, walletAddress: result.walletAddress });
       }
-      setChainPhase("confirmed");
+      setChainPhase("awaiting_confirmation");
     } catch (reason) {
       if (reason instanceof Error && reason.message.startsWith("pit_has_active_match:")) {
         setActiveMatchToRelease(reason.message.slice("pit_has_active_match:".length));
@@ -659,7 +665,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     }
   };
 
-  const needsChainJoin = role === "PLAYER" && Boolean(matchAddress) && chainPhase !== "confirmed";
+  const needsChainJoin = role === "PLAYER" && Boolean(matchAddress) && chainPhase !== "confirmed" && chainPhase !== "awaiting_confirmation";
 
   return (
     <section className="pit-overlay" aria-label={`${matchId} media pit`}>
@@ -698,6 +704,11 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
                 </button>
               </>
             )}
+            <button className="pit-leave" onClick={onExit} type="button">Leave seat</button>
+          </div>
+        ) : chainPhase === "awaiting_confirmation" ? (
+          <div className="pit-chain-join">
+            <p>Wallet approved. Verifying your onchain seat before entering the media room…</p>
             <button className="pit-leave" onClick={onExit} type="button">Leave seat</button>
           </div>
         ) : (

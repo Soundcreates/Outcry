@@ -52,6 +52,8 @@ assert.match(source, /VITE_OUTCRY_MATCH_NONCE/);
 assert.match(source, /nonce: currentMatchNonce/);
 assert.match(source, /match_account_not_initialized/);
 assert.match(source, /onChainSeatConflict/);
+assert.match(source, /onWalletJoinStarted/);
+assert.match(source, /awaiting_confirmation/);
 assert.match(source, /Restoring that seat/);
 assert.match(source, /Restore match to Base \(host\)/);
 assert.match(source, /restoreDelegatedMatchOnchain/);

@@ -1,5 +1,5 @@
 import { Room, type Client } from "colyseus";
-import { type MovementInput } from "@outcry/shared/domain";
+import { MAX_CHAT_MESSAGE_LENGTH, parseChatMessage, type MovementInput } from "@outcry/shared/domain";
 import { readServerEnv } from "@outcry/shared/env";
 import { createMatchMembershipReader, type MatchMembershipReader } from "../chain/match-membership";
 import { loadWorldGeometry, type WorldGeometry } from "./geometry";
@@ -19,6 +19,8 @@ const TICK_DT_MS = 1000 / TICK_RATE_HZ;
 const MAX_INPUTS_PER_TICK = 8;
 const MAX_PENDING_INPUTS = 32;
 const ACTIVE_MATCH_REFRESH_MS = 5_000;
+const RECONNECTION_GRACE_SECONDS = 30;
+const CHAT_COOLDOWN_MS = 700;
 
 export class WorldRoom extends Room<{ state: WorldState }> {
   // ponytail: process-local presence count; use shared storage when the server is horizontally scaled.
@@ -47,6 +49,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private activeMatchReadAt = 0;
   private activeMatchRefresh?: Promise<void>;
   private readonly pendingInputs = new Map<string, MovementInput[]>();
+  private readonly lastChatAt = new Map<string, number>();
 
   async onCreate(options: { worldId?: string } = {}) {
     const worldId = options.worldId ?? "wall-street";
@@ -66,6 +69,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.setState(new WorldState());
     this.initializePitState();
     this.onMessage("input", (client, payload) => this.enqueueInput(client, payload));
+    this.onMessage("chat", (client, payload) => this.handleChat(client, payload));
     this.onMessage("interact", (client, payload) => void this.interact(client, payload));
     this.onMessage("beginConfirm", (client) => this.beginConfirmation(client));
     this.onMessage("confirmSeat", (client, payload) => void this.confirmSeat(client, payload));
@@ -95,10 +99,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const player = this.state.players.get(client.sessionId);
     const previousMode = player?.mode;
     if (player) player.mode = "RECONNECTING";
-    this.allowReconnection(client, 5)
+    this.allowReconnection(client, RECONNECTION_GRACE_SECONDS)
       .then(() => {
         const restored = this.state.players.get(client.sessionId);
-        if (restored) restored.mode = previousMode === "SEATED" ? "SEATED" : "WALKING";
+        if (restored) restored.mode = previousMode === "SEATED" || previousMode === "RESERVING"
+          ? previousMode
+          : "WALKING";
       })
       .catch(() => this.removePlayer(client.sessionId));
   }
@@ -113,6 +119,19 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     if (!input || !queue) return;
     if (queue.length >= MAX_PENDING_INPUTS) queue.shift();
     queue.push(input);
+  }
+
+  private handleChat(client: Client, payload: unknown) {
+    const message = parseChatMessage(payload);
+    if (!message || !this.state.players.has(client.sessionId)) return;
+    const now = Date.now();
+    const lastSentAt = this.lastChatAt.get(client.sessionId) ?? 0;
+    if (now - lastSentAt < CHAT_COOLDOWN_MS) return;
+    this.lastChatAt.set(client.sessionId, now);
+    this.broadcast("chat", {
+      sessionId: client.sessionId,
+      text: message.text.slice(0, MAX_CHAT_MESSAGE_LENGTH),
+    });
   }
 
   private simulate() {
@@ -139,6 +158,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
     this.state.players.delete(sessionId);
     this.pendingInputs.delete(sessionId);
+    this.lastChatAt.delete(sessionId);
     WorldRoom.activeSessions.delete(sessionId);
     WorldRoom.seatedSessions.delete(sessionId);
   }
@@ -207,7 +227,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       player.x,
       player.y,
     );
-    if (result.accepted) this.seatPlayer(client.sessionId, player, result.seat);
+    if (result.accepted) this.reservePlayer(player, result.seat);
     this.sendSeatResult(client, result);
   }
 
@@ -248,7 +268,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       return;
     }
     const matchChanged = confirmation.matchAddress !== this.activeMatchAddress;
-    const activeOnchainMatch = matchChanged && seat.pitId === "wall-street-01"
+    // Always validate the pit PDA. The cached address can lag after the host
+    // releases a match and creates the next one.
+    const activeOnchainMatch = seat.pitId === "wall-street-01"
       ? await this.membershipReader.isActiveMatch(seat.pitId, confirmation.matchAddress)
       : true;
     if (seat.pitId !== "wall-street-01" || !activeOnchainMatch) {
@@ -288,21 +310,31 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const identity = parseSeatReconciliation(payload);
     const player = this.state.players.get(client.sessionId);
     const currentSeat = this.seating.getForSession(client.sessionId);
-    const canRebindReservedSeat = Boolean(currentSeat && currentSeat.status === "RESERVED" && player?.mode === "SEATED");
-    if (!identity || !player || (player.mode !== "WALKING" && !canRebindReservedSeat)) {
+    const canRebindPendingSeat = Boolean(
+      currentSeat &&
+      (currentSeat.status === "RESERVED" || currentSeat.status === "CONFIRMING") &&
+      player?.mode === "RESERVING",
+    );
+    if (!identity || !player || (player.mode !== "WALKING" && !canRebindPendingSeat)) {
       this.sendSeatResult(client, { accepted: false, reason: "invalid_reconciliation" });
       return;
     }
     const pit = this.geometry.pits.find(({ pitId }) => pitId === "wall-street-01");
-    if (
-      !pit ||
-      identity.matchAddress !== this.activeMatchAddress ||
-      !this.membershipReader
-    ) {
+    if (!pit || !this.membershipReader) {
       this.sendSeatResult(client, { accepted: false, reason: "chain_reconciliation_unavailable" });
       return;
     }
-    if (canRebindReservedSeat && currentSeat) {
+    const activeOnchainMatch = await this.membershipReader.isActiveMatch(pit.pitId, identity.matchAddress);
+    if (!activeOnchainMatch) {
+      this.sendSeatResult(client, { accepted: false, reason: "chain_reconciliation_unavailable" });
+      return;
+    }
+    if (identity.matchAddress !== this.activeMatchAddress) {
+      this.activeMatchAddress = identity.matchAddress;
+      const pitState = this.state.pits.get(pit.pitId);
+      if (pitState) pitState.activeMatchId = identity.matchAddress;
+    }
+    if (canRebindPendingSeat && currentSeat) {
       const releasedSeats = this.seating.releaseSession(client.sessionId);
       for (const released of releasedSeats) this.syncSeat(this.seating.get(released.pitId, released.seatIndex));
       this.clearSeatPlayer(player, currentSeat, client.sessionId);
@@ -343,14 +375,24 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   private seatPlayer(sessionId: string, player: PlayerState, seat: SeatLease) {
+    this.positionPlayerAtSeat(player, seat);
+    player.mode = "SEATED";
+    WorldRoom.seatedSessions.set(sessionId, { pitId: seat.pitId, seatIndex: seat.seatIndex });
+    this.syncSeat(seat);
+  }
+
+  private reservePlayer(player: PlayerState, seat: SeatLease) {
+    this.positionPlayerAtSeat(player, seat);
+    player.mode = "RESERVING";
+    this.syncSeat(seat);
+  }
+
+  private positionPlayerAtSeat(player: PlayerState, seat: SeatLease) {
     player.x = seat.x;
     player.y = seat.y;
     player.facing = seat.facing;
-    player.mode = "SEATED";
     player.pitId = seat.pitId;
     player.seatIndex = seat.seatIndex;
-    WorldRoom.seatedSessions.set(sessionId, { pitId: seat.pitId, seatIndex: seat.seatIndex });
-    this.syncSeat(seat);
   }
 
   private clearSeatPlayer(player: PlayerState, seat?: SeatLease, sessionId?: string) {

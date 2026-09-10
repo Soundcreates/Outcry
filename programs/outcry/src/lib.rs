@@ -177,7 +177,7 @@ pub mod outcry {
         let round = &mut ctx.accounts.round;
         round.match_key = match_state.key();
         round.round = match_state.current_round;
-        round.taker = match_state.players[match_state.current_round as usize % match_state.player_count as usize];
+        round.taker = match_state.players[match_taker_index(match_state)?];
         round.side = SIDE_BUY;
         round.quantity_lots = 0;
         round.opened_at = 0;
@@ -1026,7 +1026,7 @@ fn open_rfq_state(
         ORACLE_MAX_AGE_SECONDS,
     ))?;
 
-    let taker_index = (match_state.current_round as usize) % match_state.player_count as usize;
+    let taker_index = match_taker_index(match_state)?;
     require_keys_eq!(taker, match_state.players[taker_index], ErrorCode::NotCurrentTaker);
     round.match_key = match_key;
     round.round = match_state.current_round;
@@ -1285,7 +1285,7 @@ pub struct JoinMatch<'info> {
 
 #[derive(Accounts)]
 pub struct StartMatch<'info> {
-    #[account(mut, constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
+    #[account(mut, has_one = authority)]
     pub match_state: Account<'info, Match>,
     pub authority: Signer<'info>,
 }
@@ -1550,7 +1550,7 @@ pub struct NextRoundSession<'info> {
 
 #[derive(Accounts)]
 pub struct FinalizeScores<'info> {
-    #[account(constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
+    #[account(has_one = authority)]
     pub match_state: Account<'info, Match>,
     #[account(mut, address = match_state.result)]
     pub result: Account<'info, MatchResult>,
@@ -1588,7 +1588,7 @@ pub struct InitializeEscrow<'info> {
 
 #[derive(Accounts)]
 pub struct InitializeMatchResult<'info> {
-    #[account(mut, constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
+    #[account(mut, has_one = authority)]
     pub match_state: Account<'info, Match>,
     #[account(
         init,
@@ -1885,12 +1885,11 @@ pub struct UndelegateRound<'info> {
 pub struct UndelegateMatch<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    #[account(mut)]
+    #[account(mut, has_one = authority)]
     pub match_state: Account<'info, Match>,
     /// CHECK: MagicBlock validates the delegated payer fee-vault PDA.
     #[account(mut)]
     pub magic_fee_vault: UncheckedAccount<'info>,
-    #[account(constraint = match_state.players[0] == authority.key() @ ErrorCode::NotMatchHost)]
     pub authority: Signer<'info>,
 }
 
@@ -1986,7 +1985,8 @@ impl Match {
     }
 
     fn start(&mut self, host: Pubkey, round_count: u8) -> Result<()> {
-        require_keys_eq!(self.players[0], host, ErrorCode::NotMatchHost);
+        require_keys_eq!(self.authority, host, ErrorCode::NotMatchHost);
+        require!(self.players.contains(&host), ErrorCode::NotAMatchPlayer);
         require!(self.status == MATCH_WAITING, ErrorCode::MatchAlreadyStarted);
         require!(self.player_count >= MIN_PLAYERS_TO_START, ErrorCode::NotEnoughPlayers);
         require!(round_count > 0 && round_count <= MAX_ROUNDS, ErrorCode::InvalidRoundCount);
@@ -1996,13 +1996,21 @@ impl Match {
     }
 }
 
-fn legacy_host_for_migration(
-    stored_authority: Pubkey,
-    first_player: Pubkey,
-    caller: Pubkey,
-) -> Result<Pubkey> {
-    require!(stored_authority == caller || first_player == caller, ErrorCode::NotMatchHost);
-    Ok(if first_player == Pubkey::default() { stored_authority } else { first_player })
+fn match_taker_index(match_state: &Match) -> Result<usize> {
+    let player_count = match_state.player_count as usize;
+    require!(player_count > 0 && player_count <= MAX_PLAYERS, ErrorCode::NotEnoughPlayers);
+    // Older matches may have been started before authority was required to be seated;
+    // preserve their existing player-zero rotation while new matches anchor on the host.
+    let host_index = match_state.players[..player_count]
+        .iter()
+        .position(|player| *player == match_state.authority)
+        .unwrap_or(0);
+    Ok((host_index + match_state.current_round as usize) % player_count)
+}
+
+fn legacy_host_for_migration(stored_authority: Pubkey, _first_player: Pubkey, caller: Pubkey) -> Result<Pubkey> {
+    require_keys_eq!(stored_authority, caller, ErrorCode::NotMatchHost);
+    Ok(stored_authority)
 }
 
 fn match_can_be_released(status: u8, current_round: u8, result: Pubkey) -> bool {
@@ -2308,8 +2316,9 @@ mod tests {
     fn start_allows_two_players_and_is_once_only() {
         let mut match_state = empty_match(MAX_PLAYERS as u8);
         let host = Pubkey::new_unique();
-        assert!(match_state.join(host, 0).is_ok());
-        assert!(match_state.join(Pubkey::new_unique(), 1).is_ok());
+        match_state.authority = host;
+        assert!(match_state.join(Pubkey::new_unique(), 0).is_ok());
+        assert!(match_state.join(host, 1).is_ok());
         assert!(match_state.start(Pubkey::new_unique(), DEFAULT_ROUND_COUNT).is_err());
         assert!(match_state.start(host, 0).is_err());
         assert!(match_state.start(host, MAX_ROUNDS + 1).is_err());
@@ -2317,6 +2326,19 @@ mod tests {
         assert!(match_state.start(host, DEFAULT_ROUND_COUNT).is_err());
         assert_eq!(match_state.status, MATCH_STARTED);
         assert_eq!(match_state.round_count, DEFAULT_ROUND_COUNT);
+    }
+
+    #[test]
+    fn host_is_first_taker_and_rotation_starts_from_host() {
+        let mut match_state = empty_match(MAX_PLAYERS as u8);
+        let first_joiner = Pubkey::new_unique();
+        let host = match_state.authority;
+        assert!(match_state.join(first_joiner, 0).is_ok());
+        assert!(match_state.join(host, 1).is_ok());
+
+        assert_eq!(match_taker_index(&match_state).unwrap(), 1);
+        match_state.current_round = 1;
+        assert_eq!(match_taker_index(&match_state).unwrap(), 0);
     }
 
     #[test]
@@ -2349,15 +2371,16 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migration_promotes_first_joined_player() {
+    fn legacy_migration_preserves_stored_authority() {
         let stored_authority = Pubkey::new_unique();
         let first_player = Pubkey::new_unique();
         let second_player = Pubkey::new_unique();
 
         assert_eq!(
-            legacy_host_for_migration(stored_authority, first_player, first_player).unwrap(),
-            first_player
+            legacy_host_for_migration(stored_authority, first_player, stored_authority).unwrap(),
+            stored_authority
         );
+        assert!(legacy_host_for_migration(stored_authority, first_player, first_player).is_err());
         assert!(legacy_host_for_migration(stored_authority, first_player, second_player).is_err());
     }
 

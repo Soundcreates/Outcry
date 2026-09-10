@@ -93,6 +93,28 @@ function integerBytes(value: number | bigint, signed = false) {
   return data;
 }
 
+function startMatchSimulationError(value: { err: unknown; logs?: string[] | null; unitsConsumed?: number | null }, instructionLabels: string[]) {
+  const instructionError = typeof value.err === "object" && value.err !== null && "InstructionError" in value.err
+    ? (value.err as { InstructionError?: unknown }).InstructionError
+    : undefined;
+  const failedInstructionIndex = Array.isArray(instructionError) && typeof instructionError[0] === "number"
+    ? instructionError[0]
+    : undefined;
+  const failedInstruction = failedInstructionIndex === undefined
+    ? "unknown_instruction"
+    : instructionLabels[failedInstructionIndex] ?? `instruction_${failedInstructionIndex}`;
+  const logs = value.logs ?? [];
+  const relevantLog = [...logs].reverse().find((log) => /AnchorError|Error Code|failed|custom program error|constraint/i.test(log));
+  console.error("[outcry][match-start][simulation]", {
+    failedInstructionIndex,
+    failedInstruction,
+    err: value.err,
+    logs,
+    unitsConsumed: value.unitsConsumed ?? null,
+  });
+  return `match_start_bundle_simulation_failed:${failedInstruction}:${relevantLog ?? JSON.stringify(value.err)}`;
+}
+
 function quoteSessionKey(input: { baseRpcUrl: string; matchAddress: string; dealer: PublicKey; programId: PublicKey }) {
   return [input.baseRpcUrl, input.programId.toBase58(), input.matchAddress, input.dealer.toBase58()].join(":");
 }
@@ -398,9 +420,15 @@ export async function startMatchOnchain(input: {
   const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
   const authority = new PublicKey(connected.publicKey);
   if (authority.toBase58() !== input.hostAddress) throw new Error("host_wallet_mismatch");
+  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
   const connection = createBaseRpcConnection(input.rpcUrl);
   const matchInfo = await connection.getAccountInfo(new PublicKey(input.matchAddress), "confirmed");
-  if (!matchInfo) throw new Error("match_account_unavailable");
+  if (!matchInfo?.owner.equals(programId)) throw new Error("match_account_unavailable");
+  const matchSnapshot = decodePublicMatchAccount(input.matchAddress, matchInfo.data);
+  if (matchSnapshot.authority !== authority.toBase58()) {
+    throw new Error(`match_authority_wallet_mismatch:connect_${matchSnapshot.authority}`);
+  }
+  if (!matchSnapshot.players.includes(authority.toBase58())) throw new Error("match_authority_not_seated");
   const transaction = new Transaction();
   if (matchInfo.data.length < CURRENT_MATCH_BYTES) {
     transaction.add(createMigrateLegacyMatchInstruction({ ...input, hostAddress: authority.toBase58() }));
@@ -427,10 +455,13 @@ export async function startMatchOnchain(input: {
   transaction.recentBlockhash = blockhash.blockhash;
   transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
   const simulation = await connection.simulateTransaction(transaction);
-  if (simulation.value.err) {
-    const relevantLog = simulation.value.logs?.find((log) => /Error|failed|constraint|invalid|insufficient/i.test(log));
-    throw new Error(`start_match_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
-  }
+  if (simulation.value.err) throw new Error(startMatchSimulationError(simulation.value, [
+    ...(matchInfo.data.length < CURRENT_MATCH_BYTES ? ["migrate_legacy_match"] : []),
+    "start_match",
+    "initialize_escrow",
+    "prepare_rfq_round",
+    "initialize_match_result",
+  ]));
   const sent = await wallet.signAndSendTransaction(transaction);
   const signature = typeof sent === "string" ? sent : sent.signature;
   await connection.confirmTransaction({ signature, blockhash: blockhash.blockhash, lastValidBlockHeight: blockhash.lastValidBlockHeight }, "confirmed");

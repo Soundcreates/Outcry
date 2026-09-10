@@ -98,7 +98,7 @@ body {
   background: #0b0b0f;
 }
 
-.world-shell > div {
+.world-shell > .world-game-mount {
   position: absolute;
   inset: 0;
 }
@@ -137,6 +137,66 @@ body {
 
 .world-connection-offline {
   color: #ffb347;
+}
+
+.world-chat {
+  position: absolute;
+  z-index: 12;
+  right: 1rem;
+  bottom: 1rem;
+  display: grid;
+  gap: 0.35rem;
+  width: min(23rem, calc(100% - 2rem));
+  padding: 0.65rem;
+  color: #f4f1ea;
+  background: #11151df2;
+  border: 2px solid #2b3546;
+  box-shadow: 4px 4px 0 #0b0b0f;
+  font: 0.65rem monospace;
+  image-rendering: pixelated;
+}
+
+.world-chat label {
+  color: #ffb347;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
+.world-chat-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.world-chat input {
+  min-width: 0;
+  flex: 1;
+  padding: 0.6rem;
+  color: #0b0b0f;
+  background: #f4f1ea;
+  border: 2px solid #0b0b0f;
+  outline: 0;
+  font: 700 0.75rem monospace;
+}
+
+.world-chat input:focus {
+  border-color: #ffb347;
+  box-shadow: 2px 2px 0 #0b0b0f;
+}
+
+.world-chat button {
+  padding: 0.55rem 0.7rem;
+  border: 2px solid #0b0b0f;
+  box-shadow: 2px 2px 0 #0b0b0f;
+  font: 700 0.7rem monospace;
+}
+
+.world-chat button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.world-chat span {
+  color: #a9b3c6;
 }
 
 .pit-overlay {

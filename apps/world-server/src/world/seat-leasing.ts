@@ -1,7 +1,10 @@
 import type { SeatStatus } from "@outcry/shared/domain";
 import type { PitDefinition, SeatDefinition } from "./geometry";
 
-export const SEAT_LEASE_TTL_MS = 10_000;
+// Wallet confirmation can take longer than a normal interaction request.
+// Keep the reservation long enough for one wallet attempt; failed attempts
+// still release immediately through WorldRoom.confirmSeat.
+export const SEAT_LEASE_TTL_MS = 60_000;
 
 export type SeatLease = {
   pitId: string;
@@ -122,8 +125,11 @@ export class SeatLeaseManager {
   beginConfirmation(sessionId: string): SeatActionResult {
     const seat = this.seatFor(sessionId);
     if (!seat) return { accepted: false, reason: "no_active_seat" };
-    if (seat.status !== "RESERVED") return { accepted: false, reason: "invalid_confirmation_state" };
+    if (seat.status !== "RESERVED" && seat.status !== "CONFIRMING") {
+      return { accepted: false, reason: "invalid_confirmation_state" };
+    }
     seat.status = "CONFIRMING";
+    seat.leaseExpiresAt = this.now() + this.ttlMs;
     return { accepted: true, action: "confirming", seat: { ...seat } };
   }
 
