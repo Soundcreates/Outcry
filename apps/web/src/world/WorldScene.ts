@@ -80,7 +80,7 @@ export class WorldScene extends Phaser.Scene {
     super({ key: "WorldScene" });
     this.worldId = worldId;
     this.mapSlug = worldId;
-    this.usesRasterBackground = this.mapSlug !== "wall-street";
+    this.usesRasterBackground = true;
     this.room = room;
     this.callbacks = callbacks;
   }
@@ -118,7 +118,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const decor = map.getObjectLayer("objects_decor")?.objects ?? [];
-    this.renderDecor(decor);
+    if (!this.usesRasterBackground) this.renderDecor(decor);
     const pits = map.getObjectLayer("objects_pits")?.objects ?? [];
     const seats = map.getObjectLayer("objects_seats")?.objects ?? [];
     const pitById = new Map(
