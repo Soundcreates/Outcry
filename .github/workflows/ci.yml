@@ -16,9 +16,13 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: solana-foundation/github-actions/setup-all@v0.2.15
+        with:
+          solana_version: 3.1.10
+          anchor_version: 1.0.2
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: NO_DNA=1 anchor build
-      - run: NO_DNA=1 anchor test
+      - run: NO_DNA=1 anchor test --skip-deploy --skip-build --skip-lint

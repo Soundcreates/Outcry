@@ -15,6 +15,7 @@ import MatchHud from "../match/MatchHud";
 import PrivateInventoryPanel from "../match/PrivateInventoryPanel";
 import PrivateQuotePanel from "../match/PrivateQuotePanel";
 import TradeIntentPanel from "../match/TradeIntentPanel";
+import { API_BASE_URL } from "../config";
 
 type Props = {
   matchId: string;
@@ -35,9 +36,6 @@ type TokenResponse = {
   token?: string;
   error?: string;
 };
-
-const worldHttp = import.meta.env.VITE_WORLD_HTTP ||
-  (import.meta.env.VITE_WORLD_WS || "ws://localhost:2567").replace(/^ws/, "http");
 
 // Match accounts and wallet instructions live on Solana's durable base layer.
 const baseSolanaRpc = browserBaseRpc.url;
@@ -130,7 +128,7 @@ function settlementError(reason: unknown) {
 }
 
 async function fetchSolUsdPriceUpdates(input: { matchId: string; sessionId: string }) {
-  const response = await fetch(`${worldHttp}/api/oracle/sol-usd-update`, {
+  const response = await fetch(`${API_BASE_URL}/api/oracle/sol-usd-update`, {
     headers: {
       "x-outcry-match-id": input.matchId,
       "x-outcry-session-id": input.sessionId,
@@ -288,7 +286,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       setPhase("connecting");
       setError("");
       try {
-        const response = await fetch(`${worldHttp}/api/livekit/token`, {
+      const response = await fetch(`${API_BASE_URL}/api/livekit/token`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ matchId, role, sessionId }),

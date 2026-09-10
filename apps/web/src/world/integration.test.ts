@@ -7,7 +7,7 @@ const { Client } = await import("@colyseus/sdk");
 
 type TestRoom = Room<any, WorldState>;
 const worldUrl = process.env.VITE_WORLD_WS || "ws://127.0.0.1:2567";
-const worldHttpUrl = worldUrl.replace(/^ws/, "http");
+const worldHttpUrl = process.env.VITE_API_BASE_URL || worldUrl.replace(/^ws/, "http");
 const webUrl = process.env.VITE_WEB_URL || "http://localhost:5173";
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

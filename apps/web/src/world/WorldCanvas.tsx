@@ -5,6 +5,7 @@ import { Client } from "@colyseus/sdk";
 import { MAX_CHAT_MESSAGE_LENGTH } from "@outcry/shared/domain";
 import { WorldState } from "@outcry/shared/world-state";
 import { connectedWalletAddress } from "../chain/joinMatch";
+import { WORLD_WS_URL } from "../config";
 import { createWorldGame, type WorldRoom } from "./createWorldGame";
 import PitOverlay from "./PitOverlay";
 
@@ -75,7 +76,7 @@ export default function WorldCanvas({ worldId, onExit }: Props) {
     let game: Phaser.Game | undefined;
     let room: WorldRoom | undefined;
     let removeRoomListeners: (() => void) | undefined;
-    const client = new Client(import.meta.env.VITE_WORLD_WS || "ws://localhost:2567");
+    const client = new Client(WORLD_WS_URL);
 
     client
       .joinOrCreate("world", { worldId }, WorldState)

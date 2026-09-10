@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { parseTradeIntent, type TradeIntent } from "./tradeIntent";
+import { API_BASE_URL } from "../config";
 
 type Props = {
   active: boolean;
@@ -10,9 +11,6 @@ type Props = {
   onSubmit?: (intent: TradeIntent) => Promise<void>;
   submissionStatus?: string;
 };
-
-const worldHttp = import.meta.env.VITE_WORLD_HTTP ||
-  (import.meta.env.VITE_WORLD_WS || "ws://localhost:2567").replace(/^ws/, "http");
 
 function speechError(reason: unknown) {
   const detail = reason instanceof Error
@@ -135,7 +133,7 @@ export default function TradeIntentPanel({ active, matchId, role = "PLAYER", ses
         }
         setTranscribing(true);
         try {
-          const response = await fetch(`${worldHttp}/api/speech/transcribe`, {
+          const response = await fetch(`${API_BASE_URL}/api/speech/transcribe`, {
             method: "POST",
             headers: {
               "content-type": audio.type || "audio/webm",
