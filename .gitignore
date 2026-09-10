@@ -1,6 +1,5 @@
 docs/*
 !docs/
-!docs/AUTHORITY.md
 node_modules
 .pnpm-store
 target
@@ -9,3 +8,4 @@ dist
 .env
 artifacts
 *.md
+!docs/AUTHORITY.md
