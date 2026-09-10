@@ -21,6 +21,10 @@ declare_id!("D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt");
 
 pub const MAX_PLAYERS: usize = 4;
 pub const MAX_ROUNDS: u8 = 8;
+pub const DEFAULT_ROUND_COUNT: u8 = 3;
+pub const LEGACY_MATCH_SPACE: usize = 372;
+pub const PREVIOUS_MATCH_SPACE: usize = 373;
+pub const NO_RESOLVED_ROUND: u8 = u8::MAX;
 pub const MIN_PLAYERS_TO_START: u8 = 2;
 pub const MATCH_WAITING: u8 = 0;
 pub const MATCH_STARTED: u8 = 1;
@@ -90,6 +94,9 @@ pub mod outcry {
         match_state.seats = [Pubkey::default(); MAX_PLAYERS];
         match_state.result = Pubkey::default();
         match_state.bump = ctx.bumps.match_state;
+        match_state.round_count = DEFAULT_ROUND_COUNT;
+        match_state.last_resolved_round = NO_RESOLVED_ROUND;
+        match_state.last_round_winner = Pubkey::default();
         pit.active_match = match_state.key();
         Ok(())
     }
@@ -108,7 +115,9 @@ pub mod outcry {
         let (stored_pit, match_nonce, status, current_round, result) = {
             let data = match_info.try_borrow_data()?;
             require!(
-                data.len() == Match::SPACE || data.len() == Match::SPACE - 1,
+                data.len() == LEGACY_MATCH_SPACE
+                    || data.len() == PREVIOUS_MATCH_SPACE
+                    || data.len() == Match::SPACE,
                 ErrorCode::InvalidMatchAccount
             );
             require!(&data[..8] == Match::DISCRIMINATOR, ErrorCode::InvalidMatchAccount);
@@ -123,8 +132,8 @@ pub mod outcry {
                     .try_into()
                     .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
             );
-            let current_round = if data.len() == Match::SPACE { data[83] } else { 0 };
-            let result_offset = if data.len() == Match::SPACE { 340 } else { 339 };
+            let current_round = if data.len() == LEGACY_MATCH_SPACE { 0 } else { data[83] };
+            let result_offset = if data.len() == LEGACY_MATCH_SPACE { 339 } else { 340 };
             let result = Pubkey::new_from_array(
                 data[result_offset..result_offset + 32]
                     .try_into()
@@ -156,8 +165,8 @@ pub mod outcry {
             .join(ctx.accounts.player.key(), seat_index)
     }
 
-    pub fn start_match(ctx: Context<StartMatch>) -> Result<()> {
-        ctx.accounts.match_state.start(ctx.accounts.authority.key())
+    pub fn start_match(ctx: Context<StartMatch>, round_count: u8) -> Result<()> {
+        ctx.accounts.match_state.start(ctx.accounts.authority.key(), round_count)
     }
 
     pub fn prepare_rfq_round(ctx: Context<PrepareRfqRound>) -> Result<()> {
@@ -189,7 +198,7 @@ pub mod outcry {
 
         let legacy_data = match_info.try_borrow_data()?.to_vec();
         require!(
-            legacy_data.len() == Match::SPACE - 1,
+            legacy_data.len() == LEGACY_MATCH_SPACE || legacy_data.len() == PREVIOUS_MATCH_SPACE,
             ErrorCode::InvalidMatchAccount
         );
         require!(
@@ -202,8 +211,9 @@ pub mod outcry {
                 .try_into()
                 .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
         );
+        let first_player_offset = if legacy_data.len() == LEGACY_MATCH_SPACE { 83 } else { 84 };
         let first_player = Pubkey::new_from_array(
-            legacy_data[83..115]
+            legacy_data[first_player_offset..first_player_offset + 32]
                 .try_into()
                 .map_err(|_| error!(ErrorCode::InvalidMatchAccount))?,
         );
@@ -244,13 +254,19 @@ pub mod outcry {
             )?;
         }
 
+        let requires_current_round_offset = legacy_data.len() == LEGACY_MATCH_SPACE;
         match_info.resize(Match::SPACE)?;
         let mut data = match_info.try_borrow_mut_data()?;
-        for index in (83..legacy_data.len()).rev() {
-            data[index + 1] = legacy_data[index];
+        if requires_current_round_offset {
+            for index in (83..legacy_data.len()).rev() {
+                data[index + 1] = legacy_data[index];
+            }
+            data[83] = 0;
         }
-        data[83] = 0;
         data[8..40].copy_from_slice(host.as_ref());
+        data[373] = MAX_ROUNDS;
+        data[374] = NO_RESOLVED_ROUND;
+        data[375..407].fill(0);
         Ok(())
     }
 
@@ -994,7 +1010,8 @@ fn open_rfq_state(
     round_bump: u8,
 ) -> Result<()> {
     require!(match_state.status == MATCH_STARTED, ErrorCode::MatchNotStarted);
-    require!(match_state.current_round < MAX_ROUNDS, ErrorCode::MatchFinished);
+    require!(match_state.round_count > 0 && match_state.round_count <= MAX_ROUNDS, ErrorCode::InvalidRoundCount);
+    require!(match_state.current_round < match_state.round_count, ErrorCode::MatchFinished);
     require!(
         round.status == ROUND_PREPARED || (round.status == ROUND_OPEN && round.quantity_lots == 0),
         ErrorCode::RoundNotOpen
@@ -1172,7 +1189,13 @@ fn next_round_state(match_state: &mut Match, round: &RfqRound) -> Result<()> {
         ErrorCode::RoundNotResolved
     );
     require!(match_state.status == MATCH_STARTED, ErrorCode::MatchFinished);
-    if match_state.current_round + 1 >= MAX_ROUNDS {
+    require!(match_state.round_count > 0 && match_state.round_count <= MAX_ROUNDS, ErrorCode::InvalidRoundCount);
+    require!(round.round == match_state.current_round, ErrorCode::RoundNotResolved);
+    if round.status == ROUND_RESOLVED {
+        match_state.last_resolved_round = round.round;
+        match_state.last_round_winner = round.winning_dealer;
+    }
+    if match_state.current_round + 1 >= match_state.round_count {
         match_state.status = MATCH_FINISHED;
     } else {
         match_state.current_round += 1;
@@ -1941,10 +1964,13 @@ pub struct Match {
     pub seats: [Pubkey; MAX_PLAYERS],
     pub result: Pubkey,
     pub bump: u8,
+    pub round_count: u8,
+    pub last_resolved_round: u8,
+    pub last_round_winner: Pubkey,
 }
 
 impl Match {
-    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 1 + 1 + 1 + (32 * MAX_PLAYERS) + (32 * MAX_PLAYERS) + 32 + 1;
+    pub const SPACE: usize = 8 + 32 + 32 + 8 + 1 + 1 + 1 + 1 + (32 * MAX_PLAYERS) + (32 * MAX_PLAYERS) + 32 + 1 + 1 + 1 + 32;
 
     fn join(&mut self, player: Pubkey, seat_index: u8) -> Result<()> {
         require!(self.status == MATCH_WAITING, ErrorCode::MatchNotJoinable);
@@ -1959,10 +1985,12 @@ impl Match {
         Ok(())
     }
 
-    fn start(&mut self, host: Pubkey) -> Result<()> {
+    fn start(&mut self, host: Pubkey, round_count: u8) -> Result<()> {
         require_keys_eq!(self.players[0], host, ErrorCode::NotMatchHost);
         require!(self.status == MATCH_WAITING, ErrorCode::MatchAlreadyStarted);
         require!(self.player_count >= MIN_PLAYERS_TO_START, ErrorCode::NotEnoughPlayers);
+        require!(round_count > 0 && round_count <= MAX_ROUNDS, ErrorCode::InvalidRoundCount);
+        self.round_count = round_count;
         self.status = MATCH_STARTED;
         Ok(())
     }
@@ -2185,6 +2213,8 @@ pub enum ErrorCode {
     OracleDelegationDisabled,
     #[msg("RFQ state commits are disabled; only round and private accounts are delegated")]
     RfqStateCommitDisabled,
+    #[msg("round count must be between one and eight")]
+    InvalidRoundCount,
 }
 
 #[cfg(test)]
@@ -2204,6 +2234,9 @@ mod tests {
             seats: [Pubkey::default(); MAX_PLAYERS],
             result: Pubkey::default(),
             bump: 0,
+            round_count: DEFAULT_ROUND_COUNT,
+            last_resolved_round: NO_RESOLVED_ROUND,
+            last_round_winner: Pubkey::default(),
         }
     }
 
@@ -2277,10 +2310,13 @@ mod tests {
         let host = Pubkey::new_unique();
         assert!(match_state.join(host, 0).is_ok());
         assert!(match_state.join(Pubkey::new_unique(), 1).is_ok());
-        assert!(match_state.start(Pubkey::new_unique()).is_err());
-        assert!(match_state.start(host).is_ok());
-        assert!(match_state.start(host).is_err());
+        assert!(match_state.start(Pubkey::new_unique(), DEFAULT_ROUND_COUNT).is_err());
+        assert!(match_state.start(host, 0).is_err());
+        assert!(match_state.start(host, MAX_ROUNDS + 1).is_err());
+        assert!(match_state.start(host, DEFAULT_ROUND_COUNT).is_ok());
+        assert!(match_state.start(host, DEFAULT_ROUND_COUNT).is_err());
         assert_eq!(match_state.status, MATCH_STARTED);
+        assert_eq!(match_state.round_count, DEFAULT_ROUND_COUNT);
     }
 
     #[test]

@@ -3200,7 +3200,12 @@
           "signer": true
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "round_count",
+          "type": "u8"
+        }
+      ]
     },
     {
       "name": "submit_quote",
@@ -3997,6 +4002,11 @@
       "code": 6056,
       "name": "RfqStateCommitDisabled",
       "msg": "RFQ state commits are disabled; only round and private accounts are delegated"
+    },
+    {
+      "code": 6057,
+      "name": "InvalidRoundCount",
+      "msg": "round count must be between one and eight"
     }
   ],
   "types": [
@@ -4102,6 +4112,18 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "round_count",
+            "type": "u8"
+          },
+          {
+            "name": "last_resolved_round",
+            "type": "u8"
+          },
+          {
+            "name": "last_round_winner",
+            "type": "pubkey"
           }
         ]
       }

@@ -1,12 +1,15 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 
-// Devnet currently contains a legacy Match without the trailing bump byte (372).
-// Newer builds allocate 373; all fields used here end before that optional byte.
-const MATCH_ACCOUNT_BYTES = new Set([372, 373]);
+// Match layouts 372 and 373 predate configurable rounds. The current 407-byte
+// layout keeps membership fields at the same offsets as the 373-byte layout.
+const MATCH_ACCOUNT_BYTES = new Set([372, 373, 407]);
 const MATCH_ACCOUNT_DISCRIMINATOR = Buffer.from([236, 63, 169, 38, 15, 56, 196, 162]);
 // MagicBlock owns delegated match accounts while they execute in the TEE.
 const DELEGATION_PROGRAM_ID = new PublicKey("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 const MATCH_STATUS_OFFSET = 80;
+const MATCH_WAITING_STATUS = 0;
+const MATCH_STARTED_STATUS = 1;
+const MATCH_FINISHED_STATUS = 2;
 const MATCH_CAPACITY_OFFSET = 81;
 const MATCH_PLAYER_COUNT_OFFSET = 82;
 const MATCH_LEGACY_PLAYERS_OFFSET = 83;
@@ -42,10 +45,19 @@ export function isValidMatchAccount(
     && account.data.subarray(0, 8).equals(MATCH_ACCOUNT_DISCRIMINATOR);
 }
 
+export function isJoinableMatchAccount(
+  account: { owner: PublicKey; data: Buffer } | null,
+  programId: PublicKey,
+) {
+  if (!isValidMatchAccount(account, programId) || !account) return false;
+  return account.data[MATCH_STATUS_OFFSET] === MATCH_WAITING_STATUS
+    || account.data[MATCH_STATUS_OFFSET] === MATCH_STARTED_STATUS;
+}
+
 export function isMatchMemberAtSeat(data: Buffer, walletAddress: PublicKey, seatIndex: number) {
   if (seatIndex < 0 || seatIndex >= MAX_PLAYERS || !MATCH_ACCOUNT_BYTES.has(data.length)) return false;
-  const playersOffset = data.length === 373 ? MATCH_CURRENT_PLAYERS_OFFSET : MATCH_LEGACY_PLAYERS_OFFSET;
-  const seatsOffset = data.length === 373 ? MATCH_CURRENT_SEATS_OFFSET : MATCH_LEGACY_SEATS_OFFSET;
+  const playersOffset = data.length === 372 ? MATCH_LEGACY_PLAYERS_OFFSET : MATCH_CURRENT_PLAYERS_OFFSET;
+  const seatsOffset = data.length === 372 ? MATCH_LEGACY_SEATS_OFFSET : MATCH_CURRENT_SEATS_OFFSET;
   const player = new PublicKey(data.subarray(playersOffset + seatIndex * 32, playersOffset + (seatIndex + 1) * 32));
   const seat = new PublicKey(data.subarray(seatsOffset + seatIndex * 32, seatsOffset + (seatIndex + 1) * 32));
   return player.equals(walletAddress) && seat.equals(walletAddress);
@@ -62,7 +74,7 @@ export class SolanaMatchMembershipReader implements MatchMembershipReader {
 
   async isMatchReady(matchAddress: string) {
     const account = await this.readValidMatchAccount(matchAddress);
-    return Boolean(account);
+    return isJoinableMatchAccount(account, this.programId);
   }
 
   async isActiveMatch(pitId: string, matchAddress: string) {
@@ -80,7 +92,8 @@ export class SolanaMatchMembershipReader implements MatchMembershipReader {
       const account = await this.connection.getAccountInfo(pitAddress, "confirmed");
       if (!account || !account.owner.equals(this.programId) || account.data.length < PIT_ACTIVE_MATCH_OFFSET + 32) return undefined;
       const active = new PublicKey(account.data.subarray(PIT_ACTIVE_MATCH_OFFSET, PIT_ACTIVE_MATCH_OFFSET + 32));
-      return active.equals(PublicKey.default) ? undefined : active.toBase58();
+      if (active.equals(PublicKey.default)) return undefined;
+      return active.toBase58();
     } catch {
       return undefined;
     }
@@ -104,7 +117,7 @@ export class SolanaMatchMembershipReader implements MatchMembershipReader {
         const playerCount = account.data.readUInt8(MATCH_PLAYER_COUNT_OFFSET);
         const capacity = account.data.readUInt8(MATCH_CAPACITY_OFFSET);
         const status = account.data.readUInt8(MATCH_STATUS_OFFSET);
-        if ((status !== 0 && status !== 1) || playerCount === 0 || playerCount > MAX_PLAYERS || capacity === 0 || capacity > MAX_PLAYERS || capacity < playerCount) return false;
+        if ((status !== MATCH_WAITING_STATUS && status !== MATCH_STARTED_STATUS && status !== MATCH_FINISHED_STATUS) || playerCount === 0 || playerCount > MAX_PLAYERS || capacity === 0 || capacity > MAX_PLAYERS || capacity < playerCount) return false;
         if (isMatchMemberAtSeat(account.data, walletAddress, input.seatIndex)) return true;
       }
       if (attempt + 1 < MEMBERSHIP_READ_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, MEMBERSHIP_READ_DELAY_MS));

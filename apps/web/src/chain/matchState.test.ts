@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import outcryIdl from "./idl/outcry.json";
-import { createAuthorizeQuoteSessionInstruction, createInitializeOracleInstruction, createMigrateLegacyMatchInstruction, createNextRoundInstruction, createOpenRfqInstruction, createPrepareRfqRoundInstruction, createResolveRoundInstruction, createSettleMatchInstruction, createSkipEmptyRoundInstruction, createStartMatchInstruction, createSubmitQuoteInstruction, createSubmitQuoteSessionInstruction, createUndelegateOracleInstruction, createUndelegateRoundInstruction, DEFAULT_QUOTE_WINDOW_SECONDS, sessionGrantPda, waitForRfqExecutionState } from "./matchActions";
+import { createAuthorizeQuoteSessionInstruction, createInitializeEscrowInstruction, createInitializeOracleInstruction, createMigrateLegacyMatchInstruction, createNextRoundInstruction, createOpenRfqInstruction, createPrepareRfqRoundInstruction, createResolveRoundInstruction, createSettleMatchInstruction, createSkipEmptyRoundInstruction, createStartMatchInstruction, createSubmitQuoteInstruction, createSubmitQuoteSessionInstruction, createUndelegateOracleInstruction, createUndelegateRoundInstruction, DEFAULT_MATCH_PAYOUT_LAMPORTS, DEFAULT_QUOTE_WINDOW_SECONDS, sessionGrantPda, waitForRfqExecutionState } from "./matchActions";
 import { baseRpcConfigurationMessage, parseBrowserBaseRpc } from "./baseRpc";
 import { decodePublicMatchAccount, escrowPda, loadPublicMatchState, loadRuntimeMatchState, oraclePda, resultPda, roundPda } from "./matchState";
 import { privateInventoryPda } from "./privacy";
@@ -11,7 +11,7 @@ import { privateInventoryPda } from "./privacy";
 const match = Keypair.generate().publicKey;
 const players = Array.from({ length: 4 }, () => Keypair.generate().publicKey);
 const magicFeeVault = Keypair.generate().publicKey;
-const data = new Uint8Array(373);
+const data = new Uint8Array(407);
 const matchDiscriminator = outcryIdl.accounts.find((account) => account.name === "Match")?.discriminator ?? [];
 data.set(matchDiscriminator, 0);
 data.set(players[0].toBytes(), 8);
@@ -22,6 +22,8 @@ data[81] = 4;
 data[82] = 4;
 data[83] = 0;
 players.forEach((player, index) => data.set(player.toBytes(), 84 + index * 32));
+data[373] = 3;
+data[374] = 255;
 
 const snapshot = decodePublicMatchAccount(match.toBase58(), data);
 assert.equal(snapshot.status, "STARTED");
@@ -29,7 +31,18 @@ assert.equal(snapshot.authority, players[0].toBase58());
 assert.equal(snapshot.host, players[0].toBase58());
 assert.equal(snapshot.taker, players[0].toBase58());
 assert.equal(snapshot.playerCount, 4);
+assert.equal(snapshot.roundCount, 3);
 assert.deepEqual(snapshot.players, players.map((player) => player.toBase58()));
+const resolvedData = new Uint8Array(data);
+resolvedData[83] = 1;
+resolvedData[374] = 0;
+resolvedData.set(players[1].toBytes(), 375);
+const resolvedSnapshot = decodePublicMatchAccount(match.toBase58(), resolvedData);
+assert.equal(resolvedSnapshot.lastResolvedRound, 0);
+assert.equal(resolvedSnapshot.lastRoundWinner, players[1].toBase58());
+const previousData = new Uint8Array(data.subarray(0, 373));
+const previousSnapshot = decodePublicMatchAccount(match.toBase58(), previousData);
+assert.equal(previousSnapshot.roundCount, 8);
 const legacyData = new Uint8Array(372);
 legacyData.set(matchDiscriminator, 0);
 legacyData.set(players[0].toBytes(), 8);
@@ -43,10 +56,11 @@ const legacySnapshot = decodePublicMatchAccount(match.toBase58(), legacyData);
 assert.equal(legacySnapshot.capacity, 4);
 assert.equal(legacySnapshot.playerCount, 4);
 assert.equal(legacySnapshot.currentRound, 0);
+assert.equal(legacySnapshot.roundCount, 8);
 assert.equal(legacySnapshot.authority, players[0].toBase58());
 assert.equal(legacySnapshot.host, players[0].toBase58());
 assert.deepEqual(legacySnapshot.players, players.map((player) => player.toBase58()));
-assert.throws(() => decodePublicMatchAccount(match.toBase58(), new Uint8Array(373)), /match_account_invalid/);
+assert.throws(() => decodePublicMatchAccount(match.toBase58(), new Uint8Array(406)), /match_account_invalid/);
 
 const instruction = createOpenRfqInstruction({
   matchAddress: match.toBase58(),
@@ -72,7 +86,16 @@ const migrateInstruction = createMigrateLegacyMatchInstruction({
   matchAddress: match.toBase58(),
   hostAddress: players[0].toBase58(),
 });
-assert.equal(startInstruction.data.length, 8);
+assert.equal(startInstruction.data.length, 9);
+assert.equal(startInstruction.data[8], 3);
+const customStartInstruction = createStartMatchInstruction({
+  matchAddress: match.toBase58(),
+  hostAddress: players[0].toBase58(),
+  roundCount: 6,
+});
+assert.equal(customStartInstruction.data[8], 6);
+assert.throws(() => createStartMatchInstruction({ matchAddress: match.toBase58(), hostAddress: players[0].toBase58(), roundCount: 0 }), /invalid_round_count/);
+assert.throws(() => createStartMatchInstruction({ matchAddress: match.toBase58(), hostAddress: players[0].toBase58(), roundCount: 9 }), /invalid_round_count/);
 assert.equal(migrateInstruction.data.length, 8);
 assert.equal(migrateInstruction.keys[0]?.pubkey.toBase58(), match.toBase58());
 assert.equal(migrateInstruction.keys[1]?.pubkey.toBase58(), players[0].toBase58());
@@ -110,6 +133,14 @@ assert.equal(settlement.keys[1]?.pubkey.toBase58(), result.toBase58());
 assert.equal(settlement.keys[2]?.pubkey.toBase58(), escrowPda(match.toBase58()).toBase58());
 assert.equal(settlement.keys[3]?.isSigner, true);
 assert.equal(settlement.keys[3]?.isWritable, true);
+const escrowInitialization = createInitializeEscrowInstruction({
+  matchAddress: match.toBase58(),
+  authorityAddress: players[0].toBase58(),
+});
+assert.equal(escrowInitialization.data.length, 16);
+assert.equal(new DataView(escrowInitialization.data.buffer, escrowInitialization.data.byteOffset, escrowInitialization.data.byteLength).getBigUint64(8, true), BigInt(DEFAULT_MATCH_PAYOUT_LAMPORTS));
+assert.equal(escrowInitialization.keys[1]?.pubkey.toBase58(), escrowPda(match.toBase58()).toBase58());
+assert.throws(() => createInitializeEscrowInstruction({ matchAddress: match.toBase58(), authorityAddress: players[0].toBase58(), payoutLamports: 0 }), /invalid_escrow_payout/);
 const quoteInstruction = createSubmitQuoteInstruction({
   matchAddress: match.toBase58(),
   dealerAddress: players[1].toBase58(),
@@ -237,6 +268,51 @@ const openSnapshot = await loadPublicMatchState({
   connection: openConnection,
 });
 assert.equal(openSnapshot.oraclePriceE6, 105_000_000);
+const preparedRoundOne = new Uint8Array(preparedRound);
+preparedRoundOne[40] = 1;
+preparedRoundOne.set(players[1].toBytes(), 41);
+const resolvedRound = new Uint8Array(openRound);
+resolvedRound.set(players[0].toBytes(), 41);
+resolvedRound[99] = 1;
+resolvedRound.set(players[1].toBytes(), 140);
+new DataView(resolvedRound.buffer).setBigInt64(172, 101_250_000n, true);
+const resolvedRoundConnection = {
+  getAccountInfo: async () => ({
+    owner: new PublicKey(outcryIdl.address),
+    data: Buffer.from(resolvedData),
+  }),
+  getMultipleAccountsInfo: async (addresses: PublicKey[]) => addresses.map((address) => ({
+    owner: new PublicKey(outcryIdl.address),
+    data: Buffer.from(address.equals(roundPda(match.toBase58(), 0)) ? resolvedRound : preparedRoundOne),
+  })),
+};
+const resolvedRoundSnapshot = await loadPublicMatchState({
+  rpcUrl: "https://unused.invalid",
+  matchAddress: match.toBase58(),
+  connection: resolvedRoundConnection as never,
+});
+assert.equal(resolvedRoundSnapshot.lastRoundResult?.round, 0);
+assert.equal(resolvedRoundSnapshot.lastRoundResult?.taker, players[0].toBase58());
+assert.equal(resolvedRoundSnapshot.lastRoundResult?.side, "BUY");
+assert.equal(resolvedRoundSnapshot.lastRoundResult?.winningDealer, players[1].toBase58());
+assert.equal(resolvedRoundSnapshot.lastRoundResult?.clearingPriceE6, 101_250_000n);
+assert.equal(resolvedRoundSnapshot.lastRoundResult?.notionalE6, 101_250_000n);
+const mismatchedResolvedRound = new Uint8Array(resolvedRound);
+mismatchedResolvedRound.set(players[2].toBytes(), 140);
+await assert.rejects(
+  loadPublicMatchState({
+    rpcUrl: "https://unused.invalid",
+    matchAddress: match.toBase58(),
+    connection: {
+      ...resolvedRoundConnection,
+      getMultipleAccountsInfo: async (addresses: PublicKey[]) => addresses.map((address) => ({
+        owner: new PublicKey(outcryIdl.address),
+        data: Buffer.from(address.equals(roundPda(match.toBase58(), 0)) ? mismatchedResolvedRound : preparedRoundOne),
+      })),
+    } as never,
+  }),
+  /resolved_round_winner_mismatch/,
+);
 const skippedRound = new Uint8Array(openRound);
 skippedRound[99] = 3;
 const skippedConnection = {
@@ -321,6 +397,8 @@ assert.match(hudSource, /minimum 2 required/);
 assert.match(hudSource, /Full pit · starting in/);
 assert.match(hudSource, /Full pit · host start in/);
 assert.match(hudSource, /Retry match state/);
+assert.match(hudSource, /Round \{lastRoundResult\.round \+ 1\} resolved/);
+assert.match(hudSource, /RFQ taker/);
 const pitSource = await readFile(new URL("../world/PitOverlay.tsx", import.meta.url), "utf8");
 assert.match(pitSource, /matchSnapshot\.taker === walletAddress/);
 assert.match(pitSource, /startMatchOnchain/);
@@ -339,6 +417,8 @@ assert.match(pitSource, /5_000/);
 assert.match(pitSource, /roundStatus === "OPEN"/);
 assert.match(pitSource, /roundStatus === "PREPARED"/);
 assert.match(pitSource, /prepareRfqRoundOnchain/);
+assert.match(pitSource, /round-resolved/);
+assert.match(pitSource, /resolvedRound \+ 1 >= matchSnapshot\.roundCount/);
 assert.doesNotMatch(pitSource, /magicRouterRpcUrl: magicRouterRpc/);
 const matchStateSource = await readFile(new URL("./matchState.ts", import.meta.url), "utf8");
 assert.match(matchStateSource, /MATCH_STATE_TIMEOUT_MS = 8_000/);
@@ -358,4 +438,6 @@ assert.match(matchActionsSource, /rfq_state_not_ready:\$\{unavailable\.join\(","
 assert.match(matchActionsSource, /inventory_\$\{index\}/);
 assert.match(matchActionsSource, /skip_empty_round/);
 assert.match(matchActionsSource, /empty_round_required/);
+assert.match(matchActionsSource, /input\.round \+ 1 < input\.snapshot\.roundCount/);
+assert.doesNotMatch(matchActionsSource, /input\.round < 7/);
 console.log("match state: validated public account decoding, taker-safe RFQ instruction, and PDA derivation pass");
