@@ -538,6 +538,7 @@ export async function joinMatchOnchain(input: {
   if (existingSeat >= 0) {
     return { walletAddress: player.toBase58(), alreadyJoined: true as const, seatIndex: existingSeat };
   }
+  if (snapshot.status === "FINISHED") throw new Error("match_finished_release_required");
   validateWalletBalance(balanceLamports);
   const transaction = new Transaction().add(createJoinMatchInstruction({
     matchAddress: input.matchAddress,

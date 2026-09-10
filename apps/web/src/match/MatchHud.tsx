@@ -11,8 +11,10 @@ type Props = {
   resumingSkipped?: boolean;
   starting?: boolean;
   autoStartIn?: number;
+  roundCount?: number;
   onRetry?: () => void;
-  onStart?: () => Promise<void>;
+  onRoundCountChange?: (roundCount: number) => void;
+  onStart?: (roundCount: number) => Promise<void>;
   onSettle?: () => Promise<void>;
   onResolve?: () => Promise<void>;
   onSkip?: () => Promise<void>;
@@ -24,7 +26,15 @@ type Props = {
 
 const shortKey = (value?: string) => value ? `${value.slice(0, 4)}…${value.slice(-4)}` : "—";
 
-export default function MatchHud({ snapshot, walletAddress, error, settling, resolving, skipping, resumingSkipped, starting, autoStartIn, onRetry, onStart, onSettle, onResolve, onSkip, onResumeSkipped, onReturn, onReleaseStaleMatch, releasingStaleMatch }: Props) {
+function formatUsdcE6(value: bigint) {
+  const sign = value < 0n ? "-" : "";
+  const absolute = value < 0n ? -value : value;
+  const whole = absolute / 1_000_000n;
+  const fraction = (absolute % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return `${sign}$${whole}${fraction ? `.${fraction}` : ""}`;
+}
+
+export default function MatchHud({ snapshot, walletAddress, error, settling, resolving, skipping, resumingSkipped, starting, autoStartIn, roundCount = 3, onRetry, onRoundCountChange, onStart, onSettle, onResolve, onSkip, onResumeSkipped, onReturn, onReleaseStaleMatch, releasingStaleMatch }: Props) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -59,6 +69,7 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
   const finalRank = localIndex >= 0 && snapshot.finalScoresE6
     ? [...finalScores].sort((a, b) => b - a).indexOf(localScore ?? Number.MIN_SAFE_INTEGER) + 1
     : undefined;
+  const lastRoundResult = snapshot.lastRoundResult;
 
   return (
     <section className="match-hud" aria-label="Match state">
@@ -71,7 +82,7 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
       <div className="match-hud-topline">
         <div>
           <p className="eyebrow">MATCH HUD</p>
-          <strong>{snapshot.status} · ROUND {snapshot.currentRound + 1}/8</strong>
+          <strong>{snapshot.status} · ROUND {snapshot.currentRound + 1}/{snapshot.roundCount}</strong>
         </div>
         <span className={localIsTaker ? "hud-taker" : "hud-muted"} role="status">
           {localIsTaker
@@ -95,6 +106,14 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
         <div><span>Round clock</span><strong>{remaining === undefined ? "—" : `${remaining}s`}</strong></div>
         <div><span>Private inventory</span><strong>Only you · TEE sync</strong></div>
       </div>
+      {lastRoundResult && (
+        <div className="match-round-result" role="status">
+          <strong>Round {lastRoundResult.round + 1} resolved · dealer winner {shortKey(lastRoundResult.winningDealer)}</strong>
+          <span>
+            RFQ taker {shortKey(lastRoundResult.taker)} {lastRoundResult.side === "BUY" ? "bought" : "sold"} {lastRoundResult.quantityLots} SOL at {formatUsdcE6(lastRoundResult.clearingPriceE6)} · {lastRoundResult.side === "BUY" ? "paid" : "received"} {formatUsdcE6(lastRoundResult.notionalE6)}.
+          </span>
+        </div>
+      )}
       {canResolve && onResolve && (
         <div className="match-lobby">
           <strong>{snapshot.quoteCount >= snapshot.dealerCount ? "All dealer quotes are sealed. Resolve the round to continue." : "The quote deadline passed. Resolve the sealed quotes that arrived."}</strong>
@@ -127,7 +146,15 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
               <strong>{autoStartIn !== undefined
                 ? `Full pit · starting in ${autoStartIn}s`
                 : canStart ? "You control when the match begins." : "Waiting for at least 2 players."}</strong>
-              {onStart && <button disabled={!canStart || starting || autoStartIn !== undefined} onClick={() => void onStart()} type="button">
+              {canStart && onRoundCountChange && (
+                <label>
+                  Rounds
+                  <select disabled={starting} value={roundCount} onChange={(event) => onRoundCountChange(Number(event.target.value))}>
+                    {Array.from({ length: 8 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </label>
+              )}
+              {onStart && <button disabled={!canStart || starting || autoStartIn !== undefined} onClick={() => void onStart(roundCount)} type="button">
                 {starting ? "Starting match…" : autoStartIn !== undefined ? `Starting in ${autoStartIn}s` : "Start match"}
               </button>}
             </>

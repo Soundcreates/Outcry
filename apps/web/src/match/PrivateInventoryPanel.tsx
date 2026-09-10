@@ -7,12 +7,21 @@ type Props = {
   matchAddress?: string;
   playerAddress?: string;
   programId: string;
+  lastResolvedRound?: number;
 };
 
 const teeRpc = import.meta.env.VITE_MAGICBLOCK_TEE_RPC || import.meta.env.NEXT_PUBLIC_MAGICBLOCK_TEE_RPC || "";
 const teeValidator = import.meta.env.VITE_MAGICBLOCK_TEE_VALIDATOR || undefined;
 
-export default function PrivateInventoryPanel({ matchAddress, playerAddress, programId }: Props) {
+function formatUsdcE6(value: bigint) {
+  const sign = value < 0n ? "-" : "";
+  const absolute = value < 0n ? -value : value;
+  const whole = absolute / 1_000_000n;
+  const fraction = (absolute % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return `${sign}$${whole}${fraction ? `.${fraction}` : ""}`;
+}
+
+export default function PrivateInventoryPanel({ matchAddress, playerAddress, programId, lastResolvedRound }: Props) {
   const [snapshot, setSnapshot] = useState<PrivateInventorySnapshot>();
   const [status, setStatus] = useState<"locked" | "loading" | "ready" | "error">("locked");
   const [error, setError] = useState("");
@@ -69,12 +78,18 @@ export default function PrivateInventoryPanel({ matchAddress, playerAddress, pro
         </div>
       )}
       {status === "ready" && snapshot && (
-        <dl className="private-inventory-values">
-          <div><dt>SOL position</dt><dd>{snapshot.solPositionLots.toString()}</dd></div>
-          <div><dt>Cash (e6)</dt><dd>{snapshot.cashE6.toString()}</dd></div>
-          <div><dt>Realized PnL (e6)</dt><dd>{snapshot.realizedPnlE6.toString()}</dd></div>
-          <div><dt>Filled notional (e6)</dt><dd>{snapshot.filledNotionalE6.toString()}</dd></div>
-        </dl>
+        <>
+          <dl className="private-inventory-values">
+            <div><dt>SOL position</dt><dd>{snapshot.solPositionLots.toString()} SOL</dd></div>
+            <div><dt>Cash</dt><dd>{formatUsdcE6(snapshot.cashE6)} USDC</dd></div>
+            <div><dt>Realized PnL</dt><dd>{formatUsdcE6(snapshot.realizedPnlE6)} USDC</dd></div>
+            <div><dt>Cumulative notional</dt><dd>{formatUsdcE6(snapshot.filledNotionalE6)} USDC</dd></div>
+          </dl>
+          <div className="private-inventory-refresh">
+            <span>{lastResolvedRound === undefined ? "Refresh after a round resolves to view your latest private fill." : `Round ${lastResolvedRound + 1} settled. Refresh to view your latest private fill.`}</span>
+            <button onClick={() => void unlock()} type="button">Refresh private inventory</button>
+          </div>
+        </>
       )}
     </section>
   );

@@ -120,6 +120,7 @@ assert.match(source, /wallet_transaction_expired_retry/);
 assert.match(source, /getBalance\(player/);
 assert.match(source, /alreadyJoined/);
 assert.match(source, /seatIndex: existingSeat/);
+assert.match(source, /match_finished_release_required/);
 assert.match(source, /join_match_simulation_failed:/);
 
 console.log("wallet adapter: join and authority-bootstrap instruction metas, PDAs, discriminators, and bounds pass");

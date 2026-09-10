@@ -51,17 +51,22 @@ const RATE_LIMIT_BACKOFF_MS = 10_000;
 const MAX_RATE_LIMIT_BACKOFF_MS = 30_000;
 const RFQ_OPEN_TOPIC = "outcry-rfq";
 
-type RfqOpenNotification = {
-  type: "rfq-open";
+type MatchStateNotification = {
+  type: "rfq-open" | "round-resolved";
   matchAddress: string;
   round: number;
 };
 
-function isRfqOpenNotification(value: unknown): value is RfqOpenNotification {
+function isMatchStateNotification(value: unknown): value is MatchStateNotification {
   if (!value || typeof value !== "object") return false;
-  const notification = value as Partial<RfqOpenNotification>;
+  const notification = value as Partial<MatchStateNotification>;
   const round = notification.round;
-  return notification.type === "rfq-open" && typeof notification.matchAddress === "string" && typeof round === "number" && Number.isInteger(round) && round >= 0 && round < 8;
+  return (notification.type === "rfq-open" || notification.type === "round-resolved")
+    && typeof notification.matchAddress === "string"
+    && typeof round === "number"
+    && Number.isInteger(round)
+    && round >= 0
+    && round < 8;
 }
 
 function requireBaseSolanaRpc() {
@@ -80,6 +85,9 @@ function walletJoinError(reason: unknown) {
   }
   if (message === "wallet_already_joined_different_seat") {
     return "This wallet is already joined in a different seat. Leave that seat or use the matching seat before retrying.";
+  }
+  if (message === "match_finished_release_required") {
+    return "This match has finished. The host must release it and start a fresh match before a new wallet can join.";
   }
   if (message === "match_bootstrap_simulation_failed") {
     return "Match setup could not be simulated. Retry in a moment or leave the seat.";
@@ -110,6 +118,14 @@ function resolveRoundError(reason: unknown) {
   if (message === "empty_round_required") return "A sealed quote arrived, so this round must be resolved rather than skipped.";
   if (message === "empty_round_requires_skip") return "No quotes were sealed. Wait for the deadline, then skip the empty round.";
   return message || "round_resolution_failed";
+}
+
+function settlementError(reason: unknown) {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (message === "settlement_escrow_missing_release_required") {
+    return "This legacy match was started without its escrow payout. It cannot be settled safely; the host must release it and start a fresh match.";
+  }
+  return message || "settlement_failed";
 }
 
 async function fetchSolUsdPriceUpdates(input: { matchId: string; sessionId: string }) {
@@ -148,6 +164,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
   const [skippingRound, setSkippingRound] = useState(false);
   const [resumingSkippedRound, setResumingSkippedRound] = useState(false);
   const [startingMatch, setStartingMatch] = useState(false);
+  const [selectedRoundCount, setSelectedRoundCount] = useState(3);
   const [preparingRound, setPreparingRound] = useState(false);
   const [activeMatchToRelease, setActiveMatchToRelease] = useState<string>();
   const [currentMatchNonce, setCurrentMatchNonce] = useState(matchNonce);
@@ -177,7 +194,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     return () => { active = false; };
   }, [chainPhase, matchAddress, matchId, role]);
 
-  const startMatch = useCallback(async () => {
+  const startMatch = useCallback(async (roundCount = selectedRoundCount) => {
     if (startMatchInFlightRef.current) return;
     if (!matchAddress || !matchSnapshot?.host) throw new Error("match_host_unavailable");
     startMatchInFlightRef.current = true;
@@ -188,6 +205,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
         rpcUrl: requireBaseSolanaRpc(),
         matchAddress,
         hostAddress: matchSnapshot.host,
+        roundCount,
         programId,
       });
       setMatchRevision((value) => value + 1);
@@ -197,7 +215,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       startMatchInFlightRef.current = false;
       setStartingMatch(false);
     }
-  }, [matchAddress, matchSnapshot?.host]);
+  }, [matchAddress, matchSnapshot?.host, selectedRoundCount]);
 
   const prepareRound = useCallback(async () => {
     if (!matchAddress || !matchSnapshot?.taker) throw new Error("round_taker_unavailable");
@@ -234,10 +252,10 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     const onReconnecting = () => active && setPhase("reconnecting");
     const onReconnected = () => active && setPhase("connected");
     const onDisconnected = (_reason?: DisconnectReason) => active && setPhase("disconnected");
-    const onRfqOpen = (payload: Uint8Array) => {
+    const onMatchStateHint = (payload: Uint8Array) => {
       try {
         const notification = JSON.parse(new TextDecoder().decode(payload));
-        if (active && isRfqOpenNotification(notification) && notification.matchAddress === matchAddress) {
+        if (active && isMatchStateNotification(notification) && notification.matchAddress === matchAddress) {
           setMatchRevision((value) => value + 1);
         }
       } catch {
@@ -249,7 +267,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     room.on(RoomEvent.Reconnecting, onReconnecting);
     room.on(RoomEvent.Reconnected, onReconnected);
     room.on(RoomEvent.Disconnected, onDisconnected);
-    room.on(RoomEvent.DataReceived, onRfqOpen);
+    room.on(RoomEvent.DataReceived, onMatchStateHint);
     for (const event of [
       RoomEvent.ParticipantConnected,
       RoomEvent.ParticipantDisconnected,
@@ -291,7 +309,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       room.off(RoomEvent.Reconnecting, onReconnecting);
       room.off(RoomEvent.Reconnected, onReconnected);
       room.off(RoomEvent.Disconnected, onDisconnected);
-      room.off(RoomEvent.DataReceived, onRfqOpen);
+      room.off(RoomEvent.DataReceived, onMatchStateHint);
       for (const event of [
         RoomEvent.ParticipantConnected,
         RoomEvent.ParticipantDisconnected,
@@ -455,6 +473,9 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       if (reason instanceof Error && reason.message.startsWith("pit_has_active_match:")) {
         setActiveMatchToRelease(reason.message.slice("pit_has_active_match:".length));
       }
+      if (reason instanceof Error && reason.message === "match_finished_release_required") {
+        setActiveMatchToRelease(matchAddress);
+      }
       setChainPhase("failed");
       setError(walletJoinError(reason));
     }
@@ -529,7 +550,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       });
       setMatchRevision((value) => value + 1);
       void room.localParticipant.publishData(
-        new TextEncoder().encode(JSON.stringify({ type: "rfq-open", matchAddress, round: matchSnapshot.currentRound } satisfies RfqOpenNotification)),
+        new TextEncoder().encode(JSON.stringify({ type: "rfq-open", matchAddress, round: matchSnapshot.currentRound } satisfies MatchStateNotification)),
         { reliable: true, topic: RFQ_OPEN_TOPIC },
       ).catch(() => undefined);
     } finally {
@@ -552,7 +573,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       });
       setMatchRevision((value) => value + 1);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "settlement_failed");
+      setError(settlementError(reason));
     } finally {
       setSettling(false);
     }
@@ -563,20 +584,25 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     setError("");
     try {
       if (!matchAddress || !matchSnapshot?.host) throw new Error("match_host_unavailable");
-      const priceUpdates = matchSnapshot.currentRound >= 7
+      const resolvedRound = matchSnapshot.currentRound;
+      const priceUpdates = resolvedRound + 1 >= matchSnapshot.roundCount
         ? await fetchSolUsdPriceUpdates({ matchId, sessionId })
         : undefined;
       await resolveRoundOnchain({
         baseRpcUrl: requireBaseSolanaRpc(),
         teeRpcUrl: teeSolanaRpc,
         matchAddress,
-        round: matchSnapshot.currentRound,
+        round: resolvedRound,
         resolverAddress: matchSnapshot.host,
         snapshot: matchSnapshot,
         priceUpdates,
         programId,
       });
       setMatchRevision((value) => value + 1);
+      void room.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify({ type: "round-resolved", matchAddress, round: resolvedRound } satisfies MatchStateNotification)),
+        { reliable: true, topic: RFQ_OPEN_TOPIC },
+      ).catch(() => undefined);
     } catch (reason) {
       console.error("[outcry][resolve_round]", reason);
       setError(resolveRoundError(reason));
@@ -686,7 +712,9 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
               resumingSkipped={resumingSkippedRound}
               starting={startingMatch}
               autoStartIn={autoStartIn}
+              roundCount={selectedRoundCount}
               onRetry={() => setMatchRevision((value) => value + 1)}
+              onRoundCountChange={setSelectedRoundCount}
               onStart={startMatch}
               onSettle={settle}
               onResolve={resolveRound}
@@ -713,6 +741,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
                 matchAddress={matchAddress}
                 playerAddress={walletAddress}
                 programId={programId}
+                lastResolvedRound={matchSnapshot?.lastRoundResult?.round}
               />
             )}
             {matchOwnership !== "delegated" && role === "PLAYER" && matchSnapshot?.status === "STARTED" && matchSnapshot.taker === walletAddress && !matchSnapshot.roundStatus && (

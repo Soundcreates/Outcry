@@ -19,13 +19,14 @@ import outcryIdl from "./idl/outcry.json";
 import { createBaseRpcConnection } from "./baseRpc";
 import { createPrivateConnection, ensureTeeFeePayer, getPreparedPrivateQuote, preparePrivateQuote, privateInventoryPda, privateQuotePda, teeValidatorForRpc } from "./privacy";
 import { postPythPriceAndConsume, PythSubmissionError } from "./pyth";
-import { decodePublicMatchAccount, ORACLE_FEED_ID, ORACLE_FEED_ID_HEX, escrowPda, oraclePda, resultPda, roundPda } from "./matchState";
+import { CURRENT_MATCH_BYTES, decodePublicMatchAccount, ORACLE_FEED_ID, ORACLE_FEED_ID_HEX, escrowPda, oraclePda, resultPda, roundPda } from "./matchState";
 import type { TradeIntent } from "../match/tradeIntent";
 
 const OPEN_RFQ_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "open_rfq")?.discriminator ?? []);
 const INITIALIZE_ORACLE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_oracle")?.discriminator ?? []);
 const INITIALIZE_ORACLE_UNPRICED_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_oracle_unpriced")?.discriminator ?? []);
 const INITIALIZE_MATCH_RESULT_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_match_result")?.discriminator ?? []);
+const INITIALIZE_ESCROW_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_escrow")?.discriminator ?? []);
 const PREPARE_RFQ_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "prepare_rfq_round")?.discriminator ?? []);
 const DELEGATE_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "delegate_round")?.discriminator ?? []);
 const UPDATE_ORACLE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "update_oracle")?.discriminator ?? []);
@@ -45,6 +46,7 @@ const UNDELEGATE_ORACLE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.f
 const NEXT_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "next_round")?.discriminator ?? []);
 const PROGRAM_ID = new PublicKey(outcryIdl.address);
 export const DEFAULT_QUOTE_WINDOW_SECONDS = 30;
+export const DEFAULT_MATCH_PAYOUT_LAMPORTS = 1_000_000;
 const QUOTE_SESSION_ACTION = 2;
 const QUOTE_SESSION_DURATION_SECONDS = 15 * 60;
 const QUOTE_SESSION_SAFETY_MS = 5_000;
@@ -311,8 +313,11 @@ export async function waitForRfqExecutionState(input: {
 export function createStartMatchInstruction(input: {
   matchAddress: string;
   hostAddress: string;
+  roundCount?: number;
   programId?: string;
 }) {
+  const roundCount = input.roundCount ?? 3;
+  if (!Number.isInteger(roundCount) || roundCount < 1 || roundCount > 8) throw new Error("invalid_round_count");
   const programId = new PublicKey(input.programId ?? PROGRAM_ID);
   return new TransactionInstruction({
     programId,
@@ -320,7 +325,7 @@ export function createStartMatchInstruction(input: {
       { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
       { pubkey: new PublicKey(input.hostAddress), isWritable: false, isSigner: true },
     ],
-    data: Uint8Array.from(START_MATCH_DISCRIMINATOR) as unknown as Buffer,
+    data: Uint8Array.from([...START_MATCH_DISCRIMINATOR, roundCount]) as unknown as Buffer,
   });
 }
 
@@ -342,9 +347,31 @@ export function createInitializeMatchResultInstruction(input: {
   });
 }
 
+export function createInitializeEscrowInstruction(input: {
+  matchAddress: string;
+  authorityAddress: string;
+  payoutLamports?: number;
+  programId?: string;
+}) {
+  const payoutLamports = input.payoutLamports ?? DEFAULT_MATCH_PAYOUT_LAMPORTS;
+  if (!Number.isSafeInteger(payoutLamports) || payoutLamports <= 0) throw new Error("invalid_escrow_payout");
+  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
+      { pubkey: escrowPda(input.matchAddress, programId), isWritable: true, isSigner: false },
+      { pubkey: new PublicKey(input.authorityAddress), isWritable: true, isSigner: true },
+      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+    ],
+    data: Uint8Array.from([...INITIALIZE_ESCROW_DISCRIMINATOR, ...integerBytes(payoutLamports)]) as unknown as Buffer,
+  });
+}
+
 export function createMigrateLegacyMatchInstruction(input: {
   matchAddress: string;
   hostAddress: string;
+  roundCount?: number;
   programId?: string;
 }) {
   const programId = new PublicKey(input.programId ?? PROGRAM_ID);
@@ -363,6 +390,7 @@ export async function startMatchOnchain(input: {
   rpcUrl: string;
   matchAddress: string;
   hostAddress: string;
+  roundCount?: number;
   programId?: string;
 }) {
   const wallet = window.solana;
@@ -374,10 +402,15 @@ export async function startMatchOnchain(input: {
   const matchInfo = await connection.getAccountInfo(new PublicKey(input.matchAddress), "confirmed");
   if (!matchInfo) throw new Error("match_account_unavailable");
   const transaction = new Transaction();
-  if (matchInfo.data.length === 372) {
+  if (matchInfo.data.length < CURRENT_MATCH_BYTES) {
     transaction.add(createMigrateLegacyMatchInstruction({ ...input, hostAddress: authority.toBase58() }));
   }
   transaction.add(createStartMatchInstruction({ ...input, hostAddress: authority.toBase58() }));
+  transaction.add(createInitializeEscrowInstruction({
+    matchAddress: input.matchAddress,
+    authorityAddress: authority.toBase58(),
+    programId: input.programId,
+  }));
   transaction.add(createPrepareRfqRoundInstruction({
     matchAddress: input.matchAddress,
     takerAddress: authority.toBase58(),
@@ -785,13 +818,19 @@ export async function settleMatchOnchain(input: {
   if (winner.toBase58() !== input.winnerAddress) throw new Error("settlement_wallet_mismatch");
   const programId = input.programId ?? PROGRAM_ID.toBase58();
   const connection = createBaseRpcConnection(input.rpcUrl);
+  const escrow = escrowPda(input.matchAddress, new PublicKey(programId));
+  const escrowInfo = await connection.getAccountInfo(escrow, "confirmed");
+  if (!escrowInfo) throw new Error("settlement_escrow_missing_release_required");
   const transaction = new Transaction().add(createSettleMatchInstruction({ ...input, programId }));
   transaction.feePayer = winner;
   const blockhash = await connection.getLatestBlockhash("confirmed");
   transaction.recentBlockhash = blockhash.blockhash;
   transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
   const simulation = await connection.simulateTransaction(transaction);
-  if (simulation.value.err) throw new Error("settle_match_simulation_failed");
+  if (simulation.value.err) {
+    const relevantLog = simulation.value.logs?.find((log) => /Error|failed|constraint|insufficient|escrow/i.test(log));
+    throw new Error(`settle_match_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
+  }
   const sent = await wallet.signAndSendTransaction(transaction);
   const signature = typeof sent === "string" ? sent : sent.signature;
   await connection.confirmTransaction({ signature, blockhash: blockhash.blockhash, lastValidBlockHeight: blockhash.lastValidBlockHeight }, "confirmed");
@@ -1245,7 +1284,7 @@ export async function resolveRoundOnchain(input: {
     })],
     label: "next_round",
   });
-  if (input.round < 7) return { walletAddress: resolver.toBase58(), nextRoundSignature };
+  if (input.round + 1 < input.snapshot.roundCount) return { walletAddress: resolver.toBase58(), nextRoundSignature };
 
   await sendTeeTransaction({
     connection: session.connection,
