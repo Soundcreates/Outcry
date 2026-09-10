@@ -311,6 +311,11 @@ export class WorldScene extends Phaser.Scene {
     const seen = new Set<string>();
     state.players.forEach((player, sessionId) => {
       if (sessionId === localId) return;
+      if (player.mode === "RECONNECTING") {
+        this.remotePlayers.get(sessionId)?.sprite.destroy();
+        this.remotePlayers.delete(sessionId);
+        return;
+      }
       seen.add(sessionId);
       const remote = this.remotePlayers.get(sessionId);
       if (remote) {

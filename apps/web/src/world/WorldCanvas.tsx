@@ -17,6 +17,15 @@ type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
 type PitState = { pitId: string; seatIndex: number; matchAddress?: string; chainConfirmed?: boolean };
 const RECONNECT_FALLBACK_DELAY_MS = 10_000;
 
+function leaveWorldRoom(room: WorldRoom) {
+  try {
+    // Room.leave(true) sends a protocol message and throws if the socket is no longer open.
+    void room.leave(room.connection.isOpen);
+  } catch {
+    // The transport can close between the state check and leave().
+  }
+}
+
 export default function WorldCanvas({ worldId, onExit }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const roomRef = useRef<WorldRoom | undefined>(undefined);
@@ -72,7 +81,7 @@ export default function WorldCanvas({ worldId, onExit }: Props) {
       .joinOrCreate("world", { worldId }, WorldState)
       .then((joinedRoom) => {
         if (disposed) {
-          if (joinedRoom.connection.isOpen) void joinedRoom.leave();
+          leaveWorldRoom(joinedRoom);
           return;
         }
         preservedGameRef.current?.destroy(true);
@@ -145,7 +154,7 @@ export default function WorldCanvas({ worldId, onExit }: Props) {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       removeRoomListeners?.();
       if (roomRef.current === room) roomRef.current = undefined;
-      if (room?.connection.isOpen) void room.leave();
+      if (room) leaveWorldRoom(room);
       if (preserveForReconnect) {
         if (game) {
           game.scene.pause("WorldScene");

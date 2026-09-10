@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("./WorldScene.ts", import.meta.url), "utf8");
 assert.match(source, /canMove && this\.room\.connection\.isOpen/);
+assert.match(source, /if \(player\.mode === "RECONNECTING"\)/);
+assert.match(source, /this\.remotePlayers\.delete\(sessionId\)/);
 assert.match(source, /private sendRoomMessage\(type: string/);
 assert.match(source, /onConnectionLost\?\.\(\)/);
 assert.match(source, /chainConfirmed: value\.action === "confirmed" \|\| value\.action === "restored"/);
