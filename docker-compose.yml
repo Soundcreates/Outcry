@@ -1,0 +1,7 @@
+services:
+  world-server:
+    build:
+      context: .
+      dockerfile: apps/world-server/Dockerfile
+    ports:
+      - "${WORLD_SERVER_PORT:-2567}:2567"

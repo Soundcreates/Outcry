@@ -1,3 +1,5 @@
+# Build from the repository root:
+# docker build -f apps/world-server/Dockerfile .
 FROM node:24-bookworm-slim
 
 ENV NODE_ENV=production \
