@@ -1,4 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 export const REQUIRED_LAYERS = [
   "ground",
@@ -17,6 +18,10 @@ const DECOR_ASSETS = new Set(["tree", "bench", "bin", "dust", "planter", "lamp"]
 
 function propertyMap(object) {
   return new Map((object.properties ?? []).map(({ name, value }) => [name, value]));
+}
+
+function hasPngAlpha(buffer) {
+  return buffer.length >= 26 && buffer.toString("ascii", 1, 4) === "PNG" && [4, 6].includes(buffer[25]);
 }
 
 function isInside(point, rectangle) {
@@ -110,6 +115,9 @@ export function validateMap(map, source = "map") {
     const capacity = properties.get("capacity");
     const count = seats.filter((seat) => propertyMap(seat).get("pitId") === pitId).length;
     if (count !== capacity) fail(`pit ${pitId} capacity ${capacity} != seat count ${count}`);
+    if (seats.some((seat) => propertyMap(seat).get("pitId") === pitId && isInside(seat, pit))) {
+      fail(`pit ${pitId} has a seat anchor inside its table collision`);
+    }
   }
 
   return errors;
@@ -118,6 +126,15 @@ export function validateMap(map, source = "map") {
 export async function validateFile(path) {
   const map = JSON.parse(await readFile(path, "utf8"));
   const errors = validateMap(map, path);
+  if (basename(dirname(path)) !== "wall-street") {
+    const pitPath = join(dirname(path), "assets", "pit.png");
+    try {
+      const pitAsset = await readFile(pitPath);
+      if (!hasPngAlpha(pitAsset)) errors.push(`${pitPath}: pit asset must contain an alpha channel`);
+    } catch {
+      errors.push(`${path}: missing themed pit asset`);
+    }
+  }
   if (errors.length) throw new Error(errors.join("\n"));
   return map;
 }

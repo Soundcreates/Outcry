@@ -6,6 +6,8 @@
   "exports": {
     "./domain": "./src/domain.ts",
     "./env": "./src/env.ts",
+    "./movement": "./src/movement.ts",
+    "./world-input": "./src/world-input.ts",
     "./world-state": "./src/world-state.ts"
   },
   "dependencies": {

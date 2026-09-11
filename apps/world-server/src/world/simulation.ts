@@ -1,12 +1,12 @@
 import {
   MAX_INPUT_DT_MS,
-  MAX_WORLD_SPEED,
   type MovementInput,
 } from "@outcry/shared/domain";
+import { applyMovement, WORLD_PLAYER_HEIGHT, WORLD_PLAYER_WIDTH } from "@outcry/shared/movement";
 import type { WorldGeometry } from "./geometry";
 
-export const PLAYER_WIDTH = 18;
-export const PLAYER_HEIGHT = 24;
+export const PLAYER_WIDTH = WORLD_PLAYER_WIDTH;
+export const PLAYER_HEIGHT = WORLD_PLAYER_HEIGHT;
 
 export type SimulatedPlayer = {
   x: number;
@@ -39,28 +39,10 @@ export function parseMovementInput(payload: unknown): MovementInput | null {
 
 export function simulatePlayer(
   player: SimulatedPlayer,
-  input: MovementInput,
+  input: Pick<MovementInput, "seq" | "left" | "right" | "up" | "down"> & Partial<Pick<MovementInput, "dtMs">>,
   geometry: WorldGeometry,
-  dtMs = Math.min(input.dtMs, MAX_INPUT_DT_MS),
+  dtMs = input.dtMs ?? MAX_INPUT_DT_MS,
 ) {
   player.lastProcessedSeq = input.seq;
-  if (player.mode && player.mode !== "WALKING") return;
-  let dx = Number(input.right) - Number(input.left);
-  let dy = Number(input.down) - Number(input.up);
-  const length = Math.hypot(dx, dy);
-  if (length === 0) return;
-
-  dx /= length;
-  dy /= length;
-  player.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "left" : "right") : (dy < 0 ? "up" : "down");
-  const distance = MAX_WORLD_SPEED * Math.min(Math.max(dtMs, 0), MAX_INPUT_DT_MS) / 1000;
-  const nextX = player.x + dx * distance;
-  const nextY = player.y + dy * distance;
-
-  if (!geometry.collides(nextX - PLAYER_WIDTH / 2, player.y - PLAYER_HEIGHT / 2, PLAYER_WIDTH, PLAYER_HEIGHT)) {
-    player.x = nextX;
-  }
-  if (!geometry.collides(player.x - PLAYER_WIDTH / 2, nextY - PLAYER_HEIGHT / 2, PLAYER_WIDTH, PLAYER_HEIGHT)) {
-    player.y = nextY;
-  }
+  applyMovement(player, input, geometry, dtMs);
 }

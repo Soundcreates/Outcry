@@ -1,5 +1,8 @@
 import Phaser from "phaser";
+import { Predict, type InputHandle } from "@colyseus/sdk";
 import { MAX_CHAT_MESSAGE_LENGTH } from "@outcry/shared/domain";
+import { applyMovement, type WorldCollision } from "@outcry/shared/movement";
+import { WorldMoveInput } from "@outcry/shared/world-input";
 import type { PlayerState, WorldState } from "@outcry/shared/world-state";
 import type { WorldRoom } from "./createWorldGame";
 import avatar01 from "../../../../avatar_images/avatar_01_walk.png";
@@ -13,9 +16,9 @@ import avatar08 from "../../../../avatar_images/avatar_08_walk.png";
 import avatar09 from "../../../../avatar_images/avatar_09_walk.png";
 import avatar10 from "../../../../avatar_images/avatar_10_walk.png";
 
-const PLAYER_SPEED = 150;
 const CHAT_BUBBLE_DURATION_MS = 4_500;
 const CHAT_BUBBLE_MAX_WIDTH = 132;
+const PIT_ART_DISPLAY_SIZE = 200;
 const DECOR_COLLISIONS = {
   tree: { width: 24, height: 16 },
   bench: { width: 56, height: 14 },
@@ -79,12 +82,18 @@ export class WorldScene extends Phaser.Scene {
   private interactionText?: Phaser.GameObjects.Text;
   private interactionFeedback = "";
   private feedbackUntil = 0;
-  private inputSequence = 0;
   private readonly remotePlayers = new Map<string, RemotePlayer>();
   private readonly chatBubbles = new Map<string, ChatBubble>();
   private interactiveSeats: InteractiveSeat[] = [];
   private seatOverlayOpen = false;
   private playerAvatarIndex = 0;
+  private collision?: WorldCollision;
+  private prediction?: Predict<WorldState>;
+  private movementInput?: InputHandle<WorldMoveInput>;
+  private localReconciler?: {
+    state: PlayerState;
+    value: (field: "x" | "y") => number;
+  };
 
   constructor(worldId: string, room?: WorldRoom, callbacks: WorldSceneCallbacks = {}) {
     super({ key: "WorldScene" });
@@ -99,6 +108,7 @@ export class WorldScene extends Phaser.Scene {
     this.load.tilemapTiledJSON("world", `/${this.mapSlug}/world.tmj`);
     if (this.usesRasterBackground) {
       this.load.image("world-background", `/${this.mapSlug}/assets/background.png`);
+      if (this.mapSlug !== "wall-street") this.load.image("pit-art", `/${this.mapSlug}/assets/pit.png`);
     } else {
       this.load.image("outcry-floor", `/${this.mapSlug}/assets/floor.svg`);
       for (const asset of ["tree", "bench", "bin", "dust", "planter", "lamp"]) {
@@ -131,6 +141,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.usesRasterBackground) this.renderDecor(decor);
     const pits = map.getObjectLayer("objects_pits")?.objects ?? [];
     const seats = map.getObjectLayer("objects_seats")?.objects ?? [];
+    this.collision = this.createCollision(map, pits, seats, decor);
     const pitById = new Map(
       pits.map((pit) => [this.propertyValue(pit, "pitId") ?? pit.name, pit] as const),
     );
@@ -148,7 +159,10 @@ export class WorldScene extends Phaser.Scene {
         interactionRadius: Number(this.propertyValue(pit, "interactionRadius") ?? 48),
       }];
     });
-    this.renderPitMarkers(pits, seats);
+    this.renderPitArt(pits);
+    if (import.meta.env.DEV && new URLSearchParams(globalThis.location?.search).has("debugWorld")) {
+      this.renderPitMarkers(pits, seats);
+    }
 
     const collisionBodies = this.physics.add.staticGroup();
     for (const object of map.getObjectLayer("collision")?.objects ?? []) {
@@ -252,7 +266,7 @@ export class WorldScene extends Phaser.Scene {
       .setVisible(false);
   }
 
-  update() {
+  update(time: number, delta: number) {
     if (!this.player || !this.cursors || !this.wasd) return;
 
     const localState = this.room?.state.players.get(this.room.sessionId);
@@ -263,45 +277,69 @@ export class WorldScene extends Phaser.Scene {
     const right = this.cursors.right.isDown || this.wasd.D.isDown;
     const up = this.cursors.up.isDown || this.wasd.W.isDown;
     const down = this.cursors.down.isDown || this.wasd.S.isDown;
-    const velocity = new Phaser.Math.Vector2(Number(right) - Number(left), Number(down) - Number(up));
-    if (this.room && canMove && this.room.connection.isOpen) {
-      this.sendRoomMessage("input", {
-        seq: this.inputSequence++,
-        left,
-        right,
-        up,
-        down,
-        dtMs: Math.min(Math.max(this.game.loop.delta, 0), 50),
-      });
+    if (this.room && this.prediction && this.movementInput && this.localReconciler) {
+      const steps = this.prediction.tick(time);
+      if (!canMove) {
+        if (localState) this.player.setPosition(localState.x, localState.y).setDepth(localState.y);
+        this.player.anims.stop();
+        this.updateRemotePlayers(delta);
+        return;
+      }
+      for (let index = 0; index < steps; index += 1) {
+        this.movementInput.data.seq += 1;
+        this.movementInput.data.left = canMove && left;
+        this.movementInput.data.right = canMove && right;
+        this.movementInput.data.up = canMove && up;
+        this.movementInput.data.down = canMove && down;
+        this.movementInput.send();
+      }
+
+      const predicted = this.localReconciler.state;
+      this.player.setPosition(
+        this.localReconciler.value("x"),
+        this.localReconciler.value("y"),
+      );
+      this.player.setDepth(this.player.y);
+      this.updateAnimation(
+        this.player,
+        this.playerAvatarIndex,
+        predicted.facing,
+        canMove && (left || right || up || down),
+      );
+      this.updateRemotePlayers(delta);
+      return;
     }
 
     if (!canMove) {
       this.player.setVelocity(0, 0);
       this.player.anims.stop();
-      this.updateRemotePlayers();
+      this.updateRemotePlayers(delta);
       return;
     }
 
+    const velocity = new Phaser.Math.Vector2(Number(right) - Number(left), Number(down) - Number(up));
     if (velocity.lengthSq() === 0) {
       this.player.setVelocity(0, 0);
       this.player.anims.stop();
-      this.updateRemotePlayers();
+      this.updateRemotePlayers(delta);
       return;
     }
 
-    velocity.normalize().scale(PLAYER_SPEED);
+    velocity.normalize().scale(150);
     this.player.setVelocity(velocity.x, velocity.y);
     this.player.anims.play(this.animationKey(this.playerAvatarIndex, this.direction(velocity.x, velocity.y)), true);
-    this.updateRemotePlayers();
+    this.updateRemotePlayers(delta);
   }
 
   private syncServerState(state: WorldState) {
     const localId = this.room?.sessionId;
     const localState = localId ? state.players.get(localId) : undefined;
     if (localState && this.player) {
-      this.player.setPosition(localState.x, localState.y);
-      this.player.setDepth(localState.y);
-      if (this.player.body) this.player.body.enable = localState.mode === "WALKING";
+      this.startPrediction(localState);
+      if (!this.localReconciler || localState.mode !== "WALKING") {
+        this.player.setPosition(localState.x, localState.y).setDepth(localState.y);
+      }
+      if (this.player.body) this.player.body.enable = !this.localReconciler && localState.mode === "WALKING";
       if (this.seatOverlayOpen && localState.mode === "WALKING") {
         this.seatOverlayOpen = false;
         this.callbacks.onSeatExit?.();
@@ -454,10 +492,11 @@ export class WorldScene extends Phaser.Scene {
     )?.value;
   }
 
-  private updateRemotePlayers() {
+  private updateRemotePlayers(delta: number) {
+    const alpha = 1 - Math.exp(-Math.max(delta, 0) / 65);
     for (const remote of this.remotePlayers.values()) {
-      remote.sprite.x = Phaser.Math.Linear(remote.sprite.x, remote.targetX, 0.35);
-      remote.sprite.y = Phaser.Math.Linear(remote.sprite.y, remote.targetY, 0.35);
+      remote.sprite.x = Phaser.Math.Linear(remote.sprite.x, remote.targetX, alpha);
+      remote.sprite.y = Phaser.Math.Linear(remote.sprite.y, remote.targetY, alpha);
       remote.sprite.setDepth(remote.sprite.y);
     }
     this.updateChatBubbles();
@@ -651,6 +690,62 @@ export class WorldScene extends Phaser.Scene {
         .rectangle(x, y, horizontal ? 8 : 16, horizontal ? 16 : 8, 0x312245, 0.95)
         .setStrokeStyle(1, 0xff4fc3, 0.85)
         .setDepth(3);
+    }
+  }
+
+  private startPrediction(localState: PlayerState) {
+    if (!this.room || !this.collision || this.localReconciler) return;
+    this.movementInput = this.room.input<WorldMoveInput>({ type: WorldMoveInput, mode: "reliable" });
+    this.prediction = Predict.get(this.room, { mode: "lerp", delay: 80 });
+    this.localReconciler = this.prediction.reconciler(localState, {
+      input: this.movementInput,
+      fields: ["x", "y", "facing", "mode"],
+      smoothMs: 65,
+      step: (context, player, input) => applyMovement(player, input, this.collision!, context.dtMs),
+    });
+    if (this.player?.body) this.player.body.enable = false;
+  }
+
+  private createCollision(
+    map: Phaser.Tilemaps.Tilemap,
+    pits: Phaser.Types.Tilemaps.TiledObject[],
+    seats: Phaser.Types.Tilemaps.TiledObject[],
+    decor: Phaser.Types.Tilemaps.TiledObject[],
+  ): WorldCollision {
+    const obstacles = [
+      ...(map.getObjectLayer("collision")?.objects ?? []).map((object) => ({
+        x: object.x ?? 0,
+        y: object.y ?? 0,
+        width: object.width ?? 0,
+        height: object.height ?? 0,
+      })),
+      ...pits.map((pit) => ({
+        x: pit.x ?? 0,
+        y: pit.y ?? 0,
+        width: pit.width ?? 0,
+        height: pit.height ?? 0,
+      })),
+      ...seats.map((seat) => ({ x: (seat.x ?? 0) - 9, y: (seat.y ?? 0) - 9, width: 18, height: 18 })),
+      ...decor.flatMap((object) => {
+        const asset = this.propertyValue(object, "asset");
+        const size = typeof asset === "string" ? DECOR_COLLISIONS[asset as keyof typeof DECOR_COLLISIONS] : undefined;
+        return size ? [{ x: (object.x ?? 0) - size.width / 2, y: (object.y ?? 0) - size.height, ...size }] : [];
+      }),
+    ];
+    return {
+      collides: (x, y, width, height) =>
+        x < 0 || y < 0 || x + width > map.widthInPixels || y + height > map.heightInPixels ||
+        obstacles.some((obstacle) => x < obstacle.x + obstacle.width && x + width > obstacle.x && y < obstacle.y + obstacle.height && y + height > obstacle.y),
+    };
+  }
+
+  private renderPitArt(pits: Phaser.Types.Tilemaps.TiledObject[]) {
+    if (this.mapSlug === "wall-street") return;
+    for (const pit of pits) {
+      const width = pit.width ?? 176;
+      this.add.image((pit.x ?? 0) + width / 2, (pit.y ?? 0) + (pit.height ?? 0) / 2, "pit-art")
+        .setDisplaySize(PIT_ART_DISPLAY_SIZE, PIT_ART_DISPLAY_SIZE)
+        .setDepth((pit.y ?? 0) + (pit.height ?? 0) + 1);
     }
   }
 }

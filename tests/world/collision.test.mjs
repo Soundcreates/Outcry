@@ -38,7 +38,7 @@ for (let run = 0; run < 10; run += 1) {
   const wallAttempt = { x: 64, y: 16 };
   assert.equal(collides(wallAttempt), true, "north wall must block the route");
   assert.equal(collides({ x: 160, y: 160 }), true, "pit table must block movement");
-  assert.equal(collides({ x: 128, y: 96 }), true, "seat must block movement");
+  assert.equal(collides({ x: 160, y: 124 }), true, "seat must block movement");
   assert.equal(collides({ x: 64, y: 312 }), true, "tree must block movement");
   assert.equal(collides({ x: 104, y: 329 }), true, "bench must block movement");
   assert.equal(collides({ x: 112, y: 391 }), true, "bin must block movement");

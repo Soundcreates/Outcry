@@ -1346,9 +1346,9 @@
           "type": "Pit",
           "class": "Pit",
           "x": 128,
-          "y": 128,
+          "y": 138,
           "width": 96,
-          "height": 64,
+          "height": 36,
           "properties": [
             {
               "name": "pitId",
@@ -1378,9 +1378,9 @@
           "type": "Pit",
           "class": "Pit",
           "x": 416,
-          "y": 128,
+          "y": 138,
           "width": 96,
-          "height": 64,
+          "height": 36,
           "properties": [
             {
               "name": "pitId",
@@ -1419,8 +1419,8 @@
           "name": "pit_01_seat_0",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 128,
-          "y": 96,
+          "x": 160,
+          "y": 124,
           "width": 0,
           "height": 0,
           "properties": [
@@ -1446,8 +1446,8 @@
           "name": "pit_01_seat_1",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 176,
-          "y": 96,
+          "x": 192,
+          "y": 124,
           "width": 0,
           "height": 0,
           "properties": [
@@ -1473,8 +1473,8 @@
           "name": "pit_01_seat_2",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 128,
-          "y": 224,
+          "x": 160,
+          "y": 196,
           "width": 0,
           "height": 0,
           "properties": [
@@ -1500,8 +1500,8 @@
           "name": "pit_01_seat_3",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 176,
-          "y": 224,
+          "x": 192,
+          "y": 196,
           "width": 0,
           "height": 0,
           "properties": [
@@ -1527,8 +1527,8 @@
           "name": "pit_02_seat_0",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 416,
-          "y": 96,
+          "x": 448,
+          "y": 124,
           "width": 0,
           "height": 0,
           "properties": [
@@ -1554,8 +1554,8 @@
           "name": "pit_02_seat_1",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 464,
-          "y": 96,
+          "x": 480,
+          "y": 124,
           "width": 0,
           "height": 0,
           "properties": [
@@ -1581,8 +1581,8 @@
           "name": "pit_02_seat_2",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 416,
-          "y": 224,
+          "x": 448,
+          "y": 196,
           "width": 0,
           "height": 0,
           "properties": [
@@ -1608,8 +1608,8 @@
           "name": "pit_02_seat_3",
           "type": "PitSeat",
           "class": "PitSeat",
-          "x": 464,
-          "y": 224,
+          "x": 480,
+          "y": 196,
           "width": 0,
           "height": 0,
           "properties": [

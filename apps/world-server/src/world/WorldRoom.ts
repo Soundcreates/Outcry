@@ -1,6 +1,7 @@
-import { Room, type Client } from "colyseus";
-import { MAX_CHAT_MESSAGE_LENGTH, parseChatMessage, type MovementInput } from "@outcry/shared/domain";
+import { Room, type Client, type StepContext } from "colyseus";
+import { MAX_CHAT_MESSAGE_LENGTH, parseChatMessage } from "@outcry/shared/domain";
 import { readServerEnv } from "@outcry/shared/env";
+import { WorldMoveInput } from "@outcry/shared/world-input";
 import { createMatchMembershipReader, type MatchMembershipReader } from "../chain/match-membership";
 import { loadWorldGeometry, type WorldGeometry } from "./geometry";
 import { PLAYER_HEIGHT, PLAYER_WIDTH, parseMovementInput, simulatePlayer } from "./simulation";
@@ -15,14 +16,11 @@ import {
 } from "./seat-leasing";
 
 const TICK_RATE_HZ = 20;
-const TICK_DT_MS = 1000 / TICK_RATE_HZ;
-const MAX_INPUTS_PER_TICK = 8;
-const MAX_PENDING_INPUTS = 32;
 const ACTIVE_MATCH_REFRESH_MS = 5_000;
 const RECONNECTION_GRACE_SECONDS = 30;
 const CHAT_COOLDOWN_MS = 700;
 
-export class WorldRoom extends Room<{ state: WorldState }> {
+export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }> {
   // ponytail: process-local presence count; use shared storage when the server is horizontally scaled.
   private static readonly activeSessions = new Set<string>();
   private static readonly seatedSessions = new Map<string, { pitId: string; seatIndex: number }>();
@@ -48,7 +46,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private activeMatchAddress = "";
   private activeMatchReadAt = 0;
   private activeMatchRefresh?: Promise<void>;
-  private readonly pendingInputs = new Map<string, MovementInput[]>();
+  private readonly movementInputs = this.defineInput(WorldMoveInput, {
+    seqField: "seq",
+    bufferMaxSize: 64,
+    idle: ({ latest }) => latest ?? true,
+  });
   private readonly lastChatAt = new Map<string, number>();
 
   async onCreate(options: { worldId?: string } = {}) {
@@ -68,14 +70,13 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     if (onchainMatch) this.activeMatchAddress = onchainMatch;
     this.setState(new WorldState());
     this.initializePitState();
-    this.onMessage("input", (client, payload) => this.enqueueInput(client, payload));
     this.onMessage("chat", (client, payload) => this.handleChat(client, payload));
     this.onMessage("interact", (client, payload) => void this.interact(client, payload));
     this.onMessage("beginConfirm", (client) => this.beginConfirmation(client));
     this.onMessage("confirmSeat", (client, payload) => void this.confirmSeat(client, payload));
     this.onMessage("reconcileSeat", (client, payload) => void this.reconcileSeat(client, payload));
     this.onMessage("releaseSeat", (client) => this.releaseSeat(client));
-    this.setSimulationInterval(() => this.simulate(), TICK_DT_MS);
+    this.setFixedTimestep((context) => this.simulate(context), TICK_RATE_HZ);
   }
 
   onJoin(client: Client, options: { userId?: string } = {}) {
@@ -91,7 +92,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     player.seatIndex = -1;
     player.lastProcessedSeq = -1;
     this.state.players.set(client.sessionId, player);
-    this.pendingInputs.set(client.sessionId, []);
     WorldRoom.activeSessions.add(client.sessionId);
   }
 
@@ -113,14 +113,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.removePlayer(client.sessionId);
   }
 
-  private enqueueInput(client: Client, payload: unknown) {
-    const input = parseMovementInput(payload);
-    const queue = this.pendingInputs.get(client.sessionId);
-    if (!input || !queue) return;
-    if (queue.length >= MAX_PENDING_INPUTS) queue.shift();
-    queue.push(input);
-  }
-
   private handleChat(client: Client, payload: unknown) {
     const message = parseChatMessage(payload);
     if (!message || !this.state.players.has(client.sessionId)) return;
@@ -134,21 +126,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     });
   }
 
-  private simulate() {
+  private simulate(context: StepContext) {
     this.expireLeases();
-    for (const [sessionId, queue] of this.pendingInputs) {
-      const player = this.state.players.get(sessionId);
-      if (!player) continue;
-      let budget = TICK_DT_MS;
-      let processed = 0;
-      while (queue.length > 0 && processed < MAX_INPUTS_PER_TICK && budget > 0) {
-        const input = queue.shift();
-        if (!input) break;
-        const dtMs = Math.min(input.dtMs, budget);
-        simulatePlayer(player, input, this.geometry, dtMs);
-        budget -= dtMs;
-        processed += 1;
-      }
+    for (const [sessionId, player] of this.state.players) {
+      const input = this.movementInputs.get(sessionId).next();
+      if (input) simulatePlayer(player, input, this.geometry, context.dtMs);
     }
   }
 
@@ -157,7 +139,6 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.syncSeat(this.seating.get(released.pitId, released.seatIndex));
     }
     this.state.players.delete(sessionId);
-    this.pendingInputs.delete(sessionId);
     this.lastChatAt.delete(sessionId);
     WorldRoom.activeSessions.delete(sessionId);
     WorldRoom.seatedSessions.delete(sessionId);

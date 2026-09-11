@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { validateMap } from "../../tools/validate-maps.mjs";
+import { validateFile, validateMap } from "../../tools/validate-maps.mjs";
 
 const valid = JSON.parse(await readFile("apps/world-server/maps/wall-street/world.tmj", "utf8"));
 assert.deepEqual(validateMap(valid), []);
@@ -30,8 +30,12 @@ layer(wrongCapacity, "objects_pits").objects[0].properties.find((property) => pr
 assert.match(validateMap(wrongCapacity).join("\n"), /capacity 3 != seat count 4/);
 
 const blockedSeat = clone(valid);
-layer(blockedSeat, "collision").objects.push({ x: 128, y: 96, width: 32, height: 32 });
+layer(blockedSeat, "collision").objects.push({ x: 160, y: 124, width: 32, height: 32 });
 assert.match(validateMap(blockedSeat).join("\n"), /lies inside collision/);
+
+const seatInsideTable = clone(valid);
+layer(seatInsideTable, "objects_seats").objects[0].y = 160;
+assert.match(validateMap(seatInsideTable).join("\n"), /inside its table collision/);
 
 const externalTileset = clone(valid);
 externalTileset.tilesets[0] = { firstgid: 1, source: "tileset.tsj" };
@@ -41,4 +45,8 @@ const badDecor = clone(valid);
 badDecor.layers.find((candidate) => candidate.name === "objects_decor").objects[0].properties[0].value = "missing-asset";
 assert.match(validateMap(badDecor).join("\n"), /invalid decor/);
 
-console.log("map validator: valid map + 7 invalid fixtures passed");
+await validateFile("apps/world-server/maps/tokyo-night/world.tmj");
+await validateFile("apps/world-server/maps/shibuya-crossing/world.tmj");
+await validateFile("apps/world-server/maps/kyoto-lanterns/world.tmj");
+
+console.log("map validator: valid map + 8 invalid fixtures passed");

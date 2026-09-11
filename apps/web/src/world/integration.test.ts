@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import type { Room } from "@colyseus/sdk";
+import type { InputHandle, Room } from "@colyseus/sdk";
+import { WorldMoveInput } from "@outcry/shared/world-input";
 import { WorldState, type PlayerState } from "@outcry/shared/world-state";
 
 (globalThis as { WebSocket?: unknown }).WebSocket = undefined;
@@ -30,17 +31,21 @@ async function waitForAsync(check: () => Promise<boolean>, timeoutMs = 3_000) {
 }
 
 const sequences = new Map<string, number>();
+const movementInputs = new Map<string, InputHandle<WorldMoveInput>>();
 function sendInput(room: TestRoom, input: Partial<Record<"left" | "right" | "up" | "down", boolean>> & { dtMs?: number }) {
   const seq = sequences.get(room.sessionId) ?? 0;
   sequences.set(room.sessionId, seq + 1);
-  room.send("input", {
-    seq,
-    left: input.left ?? false,
-    right: input.right ?? false,
-    up: input.up ?? false,
-    down: input.down ?? false,
-    dtMs: input.dtMs ?? 50,
+  const movement = movementInputs.get(room.sessionId) ?? room.input<WorldMoveInput>({
+    type: WorldMoveInput,
+    mode: "reliable",
   });
+  movementInputs.set(room.sessionId, movement);
+  movement.data.seq = seq;
+  movement.data.left = input.left ?? false;
+  movement.data.right = input.right ?? false;
+  movement.data.up = input.up ?? false;
+  movement.data.down = input.down ?? false;
+  movement.send();
 }
 
 function player(room: TestRoom): PlayerState {
@@ -50,14 +55,14 @@ function player(room: TestRoom): PlayerState {
 }
 
 async function moveNearSeat(room: TestRoom, side: "left" | "right") {
-  const rightTicks = side === "left" ? 5 : 19;
+  const rightTicks = side === "left" ? 8 : 19;
   for (let index = 0; index < rightTicks; index += 1) sendInput(room, { right: true });
-  for (let index = 0; index < 4; index += 1) sendInput(room, { down: true });
+  for (let index = 0; index < 8; index += 1) sendInput(room, { down: true });
   await waitFor(() => {
     const current = player(room);
     return side === "left"
-      ? Math.hypot(current.x - 128, current.y - 96) <= 48
-      : Math.hypot(current.x - 176, current.y - 96) <= 48;
+      ? Math.hypot(current.x - 160, current.y - 124) <= 48
+      : Math.hypot(current.x - 192, current.y - 124) <= 48;
   }, 3_000);
 }
 
