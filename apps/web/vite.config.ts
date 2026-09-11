@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath, URL } from "node:url";
 
 const browserBuffer = fileURLToPath(new URL("./node_modules/buffer/index.js", import.meta.url));
+const colyseusSchema = fileURLToPath(new URL("./node_modules/@colyseus/schema/build/index.mjs", import.meta.url));
 const anchorBrowserDefine = { "process.env.ANCHOR_BROWSER": "true" };
 
 export default defineConfig({
@@ -15,5 +16,10 @@ export default defineConfig({
     // Vite pre-bundles the dynamic Pyth receiver import separately from app transforms.
     esbuildOptions: { define: anchorBrowserDefine },
   },
-  resolve: { alias: { buffer: browserBuffer } },
+  resolve: {
+    alias: [
+      { find: "buffer", replacement: browserBuffer },
+      { find: /^@colyseus\/schema$/, replacement: colyseusSchema },
+    ],
+  },
 });
