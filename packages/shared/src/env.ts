@@ -19,6 +19,7 @@ const publicEnvSchema = z.object({
 });
 
 const serverEnvSchema = publicEnvSchema.extend({
+  FRONTEND_BASE_URL: z.string().url().default("http://localhost:5173"),
   LIVEKIT_URL: optionalUrl,
   LIVEKIT_API_KEY: optionalString,
   LIVEKIT_API_SECRET: optionalString,

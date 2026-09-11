@@ -5,6 +5,7 @@ import {
   parseSeatReconciliation,
   parseSeatRequest,
   SeatLeaseManager,
+  SEAT_LEASE_TTL_MS,
 } from "./seat-leasing";
 
 const geometry = await loadWorldGeometry();
@@ -54,15 +55,20 @@ assert.equal(
 for (let cycle = 0; cycle < 100; cycle += 1) {
   const lease = manager.reserve(`expiry-${cycle}`, pit.pitId, seat.seatIndex, seat.x, seat.y);
   assert.equal(lease.accepted, true);
-  now += 10_000;
+  now += SEAT_LEASE_TTL_MS + 1;
   assert.equal(manager.expire().length, 1);
   assert.equal(manager.get(pit.pitId, seat.seatIndex)?.status, "FREE");
 }
 
 const confirmation = manager.reserve("confirmed", pit.pitId, seat.seatIndex, seat.x, seat.y);
 assert.equal(confirmation.accepted, true);
+now += 1_000;
 assert.equal(manager.beginConfirmation("confirmed").accepted, true);
 assert.equal(manager.get(pit.pitId, seat.seatIndex)?.status, "CONFIRMING");
+assert.equal(manager.get(pit.pitId, seat.seatIndex)?.leaseExpiresAt, now + SEAT_LEASE_TTL_MS);
+now += 1_000;
+assert.equal(manager.beginConfirmation("confirmed").accepted, true, "wallet retries extend a pending confirmation");
+assert.equal(manager.get(pit.pitId, seat.seatIndex)?.leaseExpiresAt, now + SEAT_LEASE_TTL_MS);
 assert.equal(manager.confirm("confirmed").accepted, true);
 assert.equal(manager.get(pit.pitId, seat.seatIndex)?.status, "CONFIRMED");
 now += 100_000;

@@ -19,8 +19,12 @@ const MATCH_CURRENT_SEATS_OFFSET = 212;
 const MAX_PLAYERS = 4;
 const PIT_ACTIVE_MATCH_OFFSET = 73;
 const PIT_SEED = Buffer.from("pit");
-const MEMBERSHIP_READ_ATTEMPTS = 4;
-const MEMBERSHIP_READ_DELAY_MS = 250;
+const ACTIVE_MATCH_READ_ATTEMPTS = 3;
+const ACTIVE_MATCH_READ_DELAY_MS = 250;
+const MEMBERSHIP_READ_ATTEMPTS = 6;
+const MEMBERSHIP_READ_DELAY_MS = 500;
+
+const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export type MatchMembershipRequest = {
   matchAddress: string;
@@ -58,9 +62,16 @@ export function isMatchMemberAtSeat(data: Buffer, walletAddress: PublicKey, seat
   if (seatIndex < 0 || seatIndex >= MAX_PLAYERS || !MATCH_ACCOUNT_BYTES.has(data.length)) return false;
   const playersOffset = data.length === 372 ? MATCH_LEGACY_PLAYERS_OFFSET : MATCH_CURRENT_PLAYERS_OFFSET;
   const seatsOffset = data.length === 372 ? MATCH_LEGACY_SEATS_OFFSET : MATCH_CURRENT_SEATS_OFFSET;
-  const player = new PublicKey(data.subarray(playersOffset + seatIndex * 32, playersOffset + (seatIndex + 1) * 32));
   const seat = new PublicKey(data.subarray(seatsOffset + seatIndex * 32, seatsOffset + (seatIndex + 1) * 32));
-  return player.equals(walletAddress) && seat.equals(walletAddress);
+  if (!seat.equals(walletAddress)) return false;
+
+  // `players` is append-only by join order; `seats` is indexed by the
+  // requested seat. They are intentionally different indexes.
+  const playerCount = data.readUInt8(MATCH_PLAYER_COUNT_OFFSET);
+  if (playerCount === 0 || playerCount > MAX_PLAYERS) return false;
+  return Array.from({ length: playerCount }, (_, index) =>
+    new PublicKey(data.subarray(playersOffset + index * 32, playersOffset + (index + 1) * 32)),
+  ).some((player) => player.equals(walletAddress));
 }
 
 export class SolanaMatchMembershipReader implements MatchMembershipReader {
@@ -88,15 +99,18 @@ export class SolanaMatchMembershipReader implements MatchMembershipReader {
     const pitIdBytes = Buffer.alloc(32);
     encoded.copy(pitIdBytes);
     const [pitAddress] = PublicKey.findProgramAddressSync([PIT_SEED, pitIdBytes], this.programId);
-    try {
-      const account = await this.connection.getAccountInfo(pitAddress, "confirmed");
-      if (!account || !account.owner.equals(this.programId) || account.data.length < PIT_ACTIVE_MATCH_OFFSET + 32) return undefined;
-      const active = new PublicKey(account.data.subarray(PIT_ACTIVE_MATCH_OFFSET, PIT_ACTIVE_MATCH_OFFSET + 32));
-      if (active.equals(PublicKey.default)) return undefined;
-      return active.toBase58();
-    } catch {
-      return undefined;
+    for (let attempt = 0; attempt < ACTIVE_MATCH_READ_ATTEMPTS; attempt += 1) {
+      try {
+        const account = await this.connection.getAccountInfo(pitAddress, "confirmed");
+        if (!account || !account.owner.equals(this.programId) || account.data.length < PIT_ACTIVE_MATCH_OFFSET + 32) return undefined;
+        const active = new PublicKey(account.data.subarray(PIT_ACTIVE_MATCH_OFFSET, PIT_ACTIVE_MATCH_OFFSET + 32));
+        if (active.equals(PublicKey.default)) return undefined;
+        return active.toBase58();
+      } catch {
+        if (attempt + 1 < ACTIVE_MATCH_READ_ATTEMPTS) await delay(ACTIVE_MATCH_READ_DELAY_MS);
+      }
     }
+    return undefined;
   }
 
   async isConfirmed(input: MatchMembershipRequest) {
@@ -120,7 +134,7 @@ export class SolanaMatchMembershipReader implements MatchMembershipReader {
         if ((status !== MATCH_WAITING_STATUS && status !== MATCH_STARTED_STATUS && status !== MATCH_FINISHED_STATUS) || playerCount === 0 || playerCount > MAX_PLAYERS || capacity === 0 || capacity > MAX_PLAYERS || capacity < playerCount) return false;
         if (isMatchMemberAtSeat(account.data, walletAddress, input.seatIndex)) return true;
       }
-      if (attempt + 1 < MEMBERSHIP_READ_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, MEMBERSHIP_READ_DELAY_MS));
+      if (attempt + 1 < MEMBERSHIP_READ_ATTEMPTS) await delay(MEMBERSHIP_READ_DELAY_MS);
     }
     return false;
   }

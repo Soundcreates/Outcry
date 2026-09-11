@@ -989,16 +989,6 @@
           "y": 0,
           "width": 32,
           "height": 480
-        },
-        {
-          "id": 5,
-          "name": "central_column",
-          "type": "Collision",
-          "class": "Collision",
-          "x": 304,
-          "y": 64,
-          "width": 32,
-          "height": 96
         }
       ]
     },

@@ -1548,7 +1548,10 @@
         },
         {
           "name": "authority",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "match_state"
+          ]
         }
       ],
       "args": []
@@ -1909,7 +1912,10 @@
         {
           "name": "authority",
           "writable": true,
-          "signer": true
+          "signer": true,
+          "relations": [
+            "match_state"
+          ]
         },
         {
           "name": "system_program",
@@ -3197,7 +3203,10 @@
         },
         {
           "name": "authority",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "match_state"
+          ]
         }
       ],
       "args": [
@@ -3341,7 +3350,10 @@
         },
         {
           "name": "authority",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "match_state"
+          ]
         },
         {
           "name": "magic_program",

@@ -1,0 +1,13 @@
+.git
+.env
+**/node_modules
+**/dist
+**/coverage
+**/*.log
+
+apps/web/src
+apps/web/public
+programs
+tests
+tools
+avatar_images

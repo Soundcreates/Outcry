@@ -8,16 +8,34 @@ import { WorldRoom } from "./world/WorldRoom";
 
 const env = readServerEnv();
 const port = Number(process.env.PORT ?? 2567);
+const frontendBaseUrl = env.FRONTEND_BASE_URL.replace(/\/+$/, "");
+const corsAllowedHeaders =
+  "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Outcry-Match-Id, X-Outcry-Session-Id";
+const corsAllowedMethods = "GET,POST,OPTIONS";
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("PORT must be an integer between 1 and 65535");
 }
 
-matchMaker.controller.DEFAULT_CORS_HEADERS["Access-Control-Allow-Headers"] =
-  "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Outcry-Match-Id, X-Outcry-Session-Id";
+Object.assign(matchMaker.controller.DEFAULT_CORS_HEADERS, {
+  "Access-Control-Allow-Origin": frontendBaseUrl,
+  "Access-Control-Allow-Headers": corsAllowedHeaders,
+  "Access-Control-Allow-Methods": corsAllowedMethods,
+});
 
 const gameServer = new Server({
   express: (app) => {
+    app.use((request: Request, response: Response, next) => {
+      response.setHeader("Access-Control-Allow-Origin", frontendBaseUrl);
+      response.setHeader("Access-Control-Allow-Headers", corsAllowedHeaders);
+      response.setHeader("Access-Control-Allow-Methods", corsAllowedMethods);
+      response.setHeader("Vary", "Origin");
+      if (request.method === "OPTIONS") {
+        response.sendStatus(204);
+        return;
+      }
+      next();
+    });
     app.use(express.json());
     app.get(
       "/health",

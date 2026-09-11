@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { MAX_CHAT_MESSAGE_LENGTH } from "@outcry/shared/domain";
 import type { PlayerState, WorldState } from "@outcry/shared/world-state";
 import type { WorldRoom } from "./createWorldGame";
 import avatar01 from "../../../../avatar_images/avatar_01_walk.png";
@@ -13,6 +14,8 @@ import avatar09 from "../../../../avatar_images/avatar_09_walk.png";
 import avatar10 from "../../../../avatar_images/avatar_10_walk.png";
 
 const PLAYER_SPEED = 150;
+const CHAT_BUBBLE_DURATION_MS = 4_500;
+const CHAT_BUBBLE_MAX_WIDTH = 132;
 const DECOR_COLLISIONS = {
   tree: { width: 24, height: 16 },
   bench: { width: 56, height: 14 },
@@ -42,6 +45,11 @@ type RemotePlayer = {
   avatarIndex: number;
 };
 
+type ChatBubble = {
+  container: Phaser.GameObjects.Container;
+  expiresAt: number;
+};
+
 type InteractiveSeat = {
   pitId: string;
   seatIndex: number;
@@ -54,6 +62,7 @@ type InteractiveSeat = {
 export type WorldSceneCallbacks = {
   onSeatEnter?: (seat: { pitId: string; seatIndex: number; matchAddress?: string; chainConfirmed?: boolean }) => void;
   onSeatExit?: () => void;
+  onConnectionLost?: () => void;
 };
 
 export class WorldScene extends Phaser.Scene {
@@ -72,6 +81,7 @@ export class WorldScene extends Phaser.Scene {
   private feedbackUntil = 0;
   private inputSequence = 0;
   private readonly remotePlayers = new Map<string, RemotePlayer>();
+  private readonly chatBubbles = new Map<string, ChatBubble>();
   private interactiveSeats: InteractiveSeat[] = [];
   private seatOverlayOpen = false;
   private playerAvatarIndex = 0;
@@ -80,7 +90,7 @@ export class WorldScene extends Phaser.Scene {
     super({ key: "WorldScene" });
     this.worldId = worldId;
     this.mapSlug = worldId;
-    this.usesRasterBackground = this.mapSlug !== "wall-street";
+    this.usesRasterBackground = true;
     this.room = room;
     this.callbacks = callbacks;
   }
@@ -118,7 +128,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const decor = map.getObjectLayer("objects_decor")?.objects ?? [];
-    this.renderDecor(decor);
+    if (!this.usesRasterBackground) this.renderDecor(decor);
     const pits = map.getObjectLayer("objects_pits")?.objects ?? [];
     const seats = map.getObjectLayer("objects_seats")?.objects ?? [];
     const pitById = new Map(
@@ -208,6 +218,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.room) {
       this.room.onStateChange((state) => this.syncServerState(state));
       this.room.onMessage("seat", (result) => this.handleSeatResult(result));
+      this.room.onMessage("chat", (payload) => this.showChatBubble(payload));
       this.syncServerState(this.room.state);
     }
     if (!this.usesRasterBackground) {
@@ -254,7 +265,7 @@ export class WorldScene extends Phaser.Scene {
     const down = this.cursors.down.isDown || this.wasd.S.isDown;
     const velocity = new Phaser.Math.Vector2(Number(right) - Number(left), Number(down) - Number(up));
     if (this.room && canMove && this.room.connection.isOpen) {
-      this.room.send("input", {
+      this.sendRoomMessage("input", {
         seq: this.inputSequence++,
         left,
         right,
@@ -290,7 +301,7 @@ export class WorldScene extends Phaser.Scene {
     if (localState && this.player) {
       this.player.setPosition(localState.x, localState.y);
       this.player.setDepth(localState.y);
-      if (this.player.body) this.player.body.enable = localState.mode !== "SEATED";
+      if (this.player.body) this.player.body.enable = localState.mode === "WALKING";
       if (this.seatOverlayOpen && localState.mode === "WALKING") {
         this.seatOverlayOpen = false;
         this.callbacks.onSeatExit?.();
@@ -300,6 +311,11 @@ export class WorldScene extends Phaser.Scene {
     const seen = new Set<string>();
     state.players.forEach((player, sessionId) => {
       if (sessionId === localId) return;
+      if (player.mode === "RECONNECTING") {
+        this.remotePlayers.get(sessionId)?.sprite.destroy();
+        this.remotePlayers.delete(sessionId);
+        return;
+      }
       seen.add(sessionId);
       const remote = this.remotePlayers.get(sessionId);
       if (remote) {
@@ -339,7 +355,17 @@ export class WorldScene extends Phaser.Scene {
         .setText(`${localState.pitId} · seat ${localState.seatIndex} · press R to leave`)
         .setVisible(true);
       if (this.releaseKey && Phaser.Input.Keyboard.JustDown(this.releaseKey)) {
-        this.room.send("releaseSeat");
+        this.sendRoomMessage("releaseSeat");
+      }
+      return;
+    }
+
+    if (localState?.mode === "RESERVING") {
+      this.interactionText
+        .setText(`${localState.pitId} · seat ${localState.seatIndex} · confirm wallet join · press R to cancel`)
+        .setVisible(true);
+      if (this.releaseKey && Phaser.Input.Keyboard.JustDown(this.releaseKey)) {
+        this.sendRoomMessage("releaseSeat");
       }
       return;
     }
@@ -357,7 +383,21 @@ export class WorldScene extends Phaser.Scene {
       .setText(`Press E to sit · ${seat.pitId} · seat ${seat.seatIndex}`)
       .setVisible(true);
     if (this.interactKey && Phaser.Input.Keyboard.JustDown(this.interactKey)) {
-      this.room.send("interact", { pitId: seat.pitId, seatIndex: seat.seatIndex });
+      this.sendRoomMessage("interact", { pitId: seat.pitId, seatIndex: seat.seatIndex });
+    }
+  }
+
+  private sendRoomMessage(type: string, payload?: unknown) {
+    if (!this.room || !this.room.connection.isOpen) {
+      this.callbacks.onConnectionLost?.();
+      return false;
+    }
+    try {
+      this.room.send(type, payload);
+      return true;
+    } catch {
+      this.callbacks.onConnectionLost?.();
+      return false;
     }
   }
 
@@ -419,6 +459,88 @@ export class WorldScene extends Phaser.Scene {
       remote.sprite.x = Phaser.Math.Linear(remote.sprite.x, remote.targetX, 0.35);
       remote.sprite.y = Phaser.Math.Linear(remote.sprite.y, remote.targetY, 0.35);
       remote.sprite.setDepth(remote.sprite.y);
+    }
+    this.updateChatBubbles();
+  }
+
+  private showChatBubble(payload: unknown) {
+    if (!payload || typeof payload !== "object") return;
+    const value = payload as { sessionId?: unknown; text?: unknown };
+    if (typeof value.sessionId !== "string" || typeof value.text !== "string") return;
+    const text = value.text.replace(/\s+/g, " ").trim().slice(0, MAX_CHAT_MESSAGE_LENGTH);
+    if (!text) return;
+
+    this.chatBubbles.get(value.sessionId)?.container.destroy();
+    const textObject = this.add.text(0, 0, text, {
+      color: "#0b0b0f",
+      fontFamily: "monospace",
+      fontSize: "10px",
+      fontStyle: "bold",
+      align: "center",
+      lineSpacing: 1,
+      wordWrap: { width: CHAT_BUBBLE_MAX_WIDTH - 18 },
+    }).setOrigin(0.5, 0);
+    const paddingX = 9;
+    const paddingY = 6;
+    const width = Math.min(
+      CHAT_BUBBLE_MAX_WIDTH,
+      Math.max(48, Math.ceil(textObject.width) + paddingX * 2),
+    );
+    const height = Math.ceil(textObject.height) + paddingY * 2;
+    const left = -width / 2;
+    const right = width / 2;
+    const top = -height - 10;
+    const bottom = -10;
+    const points = [
+      { x: left + 4, y: top },
+      { x: right - 4, y: top },
+      { x: right - 4, y: top + 3 },
+      { x: right, y: top + 3 },
+      { x: right, y: bottom - 4 },
+      { x: right - 4, y: bottom - 4 },
+      { x: right - 4, y: bottom },
+      { x: 4, y: bottom },
+      { x: 0, y: bottom + 7 },
+      { x: -4, y: bottom },
+      { x: left + 4, y: bottom },
+      { x: left + 4, y: bottom - 4 },
+      { x: left, y: bottom - 4 },
+      { x: left, y: top + 3 },
+      { x: left + 4, y: top + 3 },
+    ];
+    const graphics = this.add.graphics();
+    graphics.fillStyle(0x0b0b0f, 0.8).fillPoints(points.map(({ x, y }) => ({ x: x + 2, y: y + 3 })), true);
+    graphics.fillStyle(0xf4f1ea, 1).fillPoints(points, true);
+    graphics.lineStyle(2, 0x0b0b0f, 1).strokePoints(points, true);
+    graphics.fillStyle(0xffb347, 1).fillRect(-3, bottom - 2, 6, 2);
+    textObject.setPosition(0, top + paddingY);
+    const container = this.add.container(0, 0, [graphics, textObject]);
+    container.setDepth(10_000);
+    this.chatBubbles.set(value.sessionId, {
+      container,
+      expiresAt: this.time.now + CHAT_BUBBLE_DURATION_MS,
+    });
+    this.updateChatBubbles();
+  }
+
+  private updateChatBubbles() {
+    for (const [sessionId, bubble] of this.chatBubbles) {
+      if (this.time.now >= bubble.expiresAt) {
+        bubble.container.destroy();
+        this.chatBubbles.delete(sessionId);
+        continue;
+      }
+      const anchor = sessionId === this.room?.sessionId
+        ? this.player
+        : this.remotePlayers.get(sessionId)?.sprite;
+      if (!anchor) {
+        bubble.container.setVisible(false);
+        continue;
+      }
+      bubble.container
+        .setVisible(true)
+        .setPosition(anchor.x, anchor.y - 30)
+        .setDepth(anchor.depth + 1_000);
     }
   }
 

@@ -80,6 +80,12 @@ function readI64(data: Uint8Array, offset: number) {
   return new DataView(data.buffer, data.byteOffset, data.byteLength).getBigInt64(offset, true);
 }
 
+function takerForRound(players: string[], authority: string, currentRound: number) {
+  const hostIndex = players.indexOf(authority);
+  const startingIndex = hostIndex >= 0 ? hostIndex : 0;
+  return players[(startingIndex + currentRound) % players.length];
+}
+
 function assertAccount(data: Uint8Array, discriminator: Uint8Array, minimumLength: number, label: string) {
   if (data.length < minimumLength || !sameBytes(data.slice(0, 8), discriminator)) throw new Error(`${label}_account_invalid`);
 }
@@ -149,11 +155,9 @@ export function decodePublicMatchAccount(matchAddress: string, data: Uint8Array)
       snapshot.lastRoundWinner = lastRoundWinner.toBase58();
     }
   }
+  snapshot.host = snapshot.authority;
   if (snapshot.status === "STARTED" && snapshot.playerCount > 0) {
-    snapshot.host = snapshot.players[0];
-    snapshot.taker = snapshot.players[snapshot.currentRound % snapshot.playerCount];
-  } else if (snapshot.playerCount > 0) {
-    snapshot.host = snapshot.players[0];
+    snapshot.taker = takerForRound(snapshot.players, snapshot.authority, snapshot.currentRound);
   }
   return snapshot;
 }

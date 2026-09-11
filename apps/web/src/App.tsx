@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import WorldCanvas from "./world/WorldCanvas";
+import { API_BASE_URL } from "./config";
 
 type WorldCard = {
   id: string;
@@ -15,9 +16,6 @@ const initialWorlds: WorldCard[] = [
   { id: "shibuya-crossing", name: "Shibuya Crossing", online: 0, pits: 2, ready: true },
   { id: "kyoto-lanterns", name: "Kyoto Lanterns", online: 0, pits: 2, ready: true },
 ];
-
-const worldHttp = import.meta.env.VITE_WORLD_HTTP ||
-  (import.meta.env.VITE_WORLD_WS || "ws://localhost:2567").replace(/^ws/, "http");
 
 function worldFromUrl() {
   const id = new URLSearchParams(window.location.search).get("world");
@@ -42,7 +40,7 @@ export default function App() {
     let active = true;
     const refreshWorlds = async () => {
       try {
-        const response = await fetch(`${worldHttp}/api/worlds`);
+        const response = await fetch(`${API_BASE_URL}/api/worlds`);
         if (!response.ok) return;
         const payload = await response.json() as { worlds?: Array<{ id: string; online: number; activePits: number }> };
         if (!active || !Array.isArray(payload.worlds)) return;
