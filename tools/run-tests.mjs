@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 const tests = [
   "tools/phase-00.mjs",
   "apps/web/vite.config.test.ts",
-  "apps/web/src/App.test.ts",
+  "apps/web/src/PlayApp.test.ts",
   "tests/world/map-validator.test.mjs",
   "tests/world/collision.test.mjs",
   "apps/world-server/src/world/world.test.ts",

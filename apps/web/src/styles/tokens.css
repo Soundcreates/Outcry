@@ -1,0 +1,33 @@
+/**
+ * Design tokens for the marketing surface (apps/web/src/landing).
+ * Additive only: these are custom properties, not resets, so the existing
+ * game UI in styles.css is untouched unless a component opts in with var(...).
+ * Palette and type are pulled directly from Wispr Flow's shipped CSS:
+ * bg #FFFFEB, text #1A1A1A, accents #F0D7FF / #4d65ff / #034f46,
+ * fonts EB Garamond (serif display, italic emphasis) + Figtree (sans body/UI).
+ */
+:root {
+  --bg-root: #fffdf0;
+  --bg-panel: #fffbe0;
+  --bg-panel-raised: #fff6c9;
+  --bg-ink: #1a1a1a;
+
+  --text-primary: #1a1a1a;
+  --text-secondary: #4a4a42;
+  --text-muted: #7a7568;
+
+  --border-default: #e8e0bd;
+  --border-strong: #1a1a1a;
+
+  --accent-lavender: #f0d7ff;
+  --accent-lavender-strong: #e2b8ff;
+  --accent-blue: #4d65ff;
+  --accent-green: #034f46;
+
+  --state-success: #034f46;
+  --state-warning: #b3660a;
+  --state-danger: #b3261e;
+
+  --font-display: "EB Garamond", "Times New Roman", serif;
+  --font-body: "Figtree", system-ui, sans-serif;
+}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import WorldCanvas from "./world/WorldCanvas";
 import { API_BASE_URL } from "./config";
+import { WORLDS } from "./worlds";
 
 type WorldCard = {
   id: string;
@@ -10,12 +11,13 @@ type WorldCard = {
   ready: boolean;
 };
 
-const initialWorlds: WorldCard[] = [
-  { id: "wall-street", name: "Wall Street", online: 0, pits: 2, ready: true },
-  { id: "tokyo-night", name: "Tokyo Night", online: 0, pits: 2, ready: true },
-  { id: "shibuya-crossing", name: "Shibuya Crossing", online: 0, pits: 2, ready: true },
-  { id: "kyoto-lanterns", name: "Kyoto Lanterns", online: 0, pits: 2, ready: true },
-];
+const initialWorlds: WorldCard[] = WORLDS.map((world) => ({
+  id: world.id,
+  name: world.name,
+  online: 0,
+  pits: world.pits,
+  ready: true,
+}));
 
 function worldFromUrl() {
   const id = new URLSearchParams(window.location.search).get("world");

@@ -1,15 +1,23 @@
-import { StrictMode } from "react";
+import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import "./polyfills";
-import App from "./App";
+import "./styles/tokens.css";
 import "./styles.css";
 
-const root = document.getElementById("root");
+const params = new URLSearchParams(window.location.search);
+const wantsPlay = params.has("play") || params.has("world");
 
+const Entry = wantsPlay
+  ? lazy(() => import("./PlayApp"))
+  : lazy(() => import("./landing/LandingPage"));
+
+const root = document.getElementById("root");
 if (!root) throw new Error("Missing Vite root element");
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <Suspense fallback={null}>
+      <Entry />
+    </Suspense>
   </StrictMode>,
 );

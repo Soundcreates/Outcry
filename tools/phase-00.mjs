@@ -9,7 +9,7 @@ const requiredFiles = [
   "apps/web/package.json",
   "apps/web/index.html",
   "apps/web/src/main.tsx",
-  "apps/web/src/App.tsx",
+  "apps/web/src/PlayApp.tsx",
   "apps/web/src/chain/idl/outcry.json",
   "apps/web/vite.config.ts",
   "apps/world-server/package.json",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const source = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+const source = await readFile(new URL("./PlayApp.tsx", import.meta.url), "utf8");
 assert.match(source, /new URLSearchParams\(window\.location\.search\)/);
 assert.match(source, /window\.history\.replaceState/);
 assert.match(source, /world=\$\{encodeURIComponent\(id\)\}/);
