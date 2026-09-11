@@ -39,8 +39,8 @@ importers:
         specifier: 0.17.0
         version: 0.17.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@outcry/shared':
-        specifier: file:../../packages/shared
-        version: link:../../packages/shared
+        specifier: file:../world-server/shared
+        version: link:../world-server/shared
       '@pythnetwork/pyth-solana-receiver':
         specifier: ^0.16.0
         version: 0.16.0(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@5.0.10)
@@ -91,8 +91,8 @@ importers:
         specifier: 5.0.27
         version: 5.0.27(typescript@5.9.2)
       '@outcry/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
+        specifier: file:./shared
+        version: link:shared
       '@solana/web3.js':
         specifier: 1.98.4
         version: 1.98.4(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@5.0.10)
@@ -108,19 +108,13 @@ importers:
       zod:
         specifier: 4.5.4
         version: 4.5.4
+      tsx:
+        specifier: 4.20.3
+        version: 4.20.3
     devDependencies:
       '@types/express':
         specifier: 5.0.3
         version: 5.0.3
-
-  packages/shared:
-    dependencies:
-      '@colyseus/schema':
-        specifier: 5.0.27
-        version: 5.0.27(typescript@5.9.2)
-      zod:
-        specifier: 4.5.4
-        version: 4.5.4
 
 packages:
 

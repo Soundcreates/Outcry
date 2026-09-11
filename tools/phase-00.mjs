@@ -16,8 +16,8 @@ const requiredFiles = [
   "apps/world-server/src/index.ts",
   "programs/outcry/Cargo.toml",
   "programs/outcry/src/lib.rs",
-  "packages/shared/src/domain.ts",
-  "packages/shared/src/env.ts",
+  "apps/world-server/shared/src/domain.ts",
+  "apps/world-server/shared/src/env.ts",
   "docs/AUTHORITY.md",
   ".env.example",
 ];

@@ -73,7 +73,7 @@ function rectContains(rectangle: CollisionRect, x: number, y: number, width: num
 
 export async function loadWorldGeometry(worldId = "wall-street"): Promise<WorldGeometry> {
   const map = JSON.parse(
-    await readFile(new URL(`../../../../maps/${worldId}/world.tmj`, import.meta.url), "utf8"),
+    await readFile(new URL(`../../maps/${worldId}/world.tmj`, import.meta.url), "utf8"),
   );
   const layers = new Map(
     ((map.layers ?? []) as TiledLayer[]).map((layer) => [layer.name, layer] as const),

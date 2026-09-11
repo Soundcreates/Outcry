@@ -12,12 +12,13 @@
   },
   "dependencies": {
     "@colyseus/schema": "5.0.27",
-    "@outcry/shared": "workspace:*",
+    "@outcry/shared": "file:./shared",
     "@solana/web3.js": "1.98.4",
     "colyseus": "0.18.5",
     "express": "5.2.1",
     "livekit-server-sdk": "2.18.0",
-    "zod": "4.5.4"
+    "zod": "4.5.4",
+    "tsx": "4.20.3"
   },
   "devDependencies": {
     "@types/express": "5.0.3"

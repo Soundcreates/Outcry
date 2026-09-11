@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const map = JSON.parse(await readFile("maps/wall-street/world.tmj", "utf8"));
+const map = JSON.parse(await readFile("apps/world-server/maps/wall-street/world.tmj", "utf8"));
 const collisionLayer = map.layers.find((layer) => layer.name === "collision");
 const pits = map.layers.find((layer) => layer.name === "objects_pits").objects;
 const seats = map.layers.find((layer) => layer.name === "objects_seats").objects;

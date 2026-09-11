@@ -10,7 +10,7 @@ export default defineConfig({
   plugins: [react()],
   envPrefix: ["VITE_", "NEXT_PUBLIC_"],
   envDir: "../..",
-  publicDir: "../../maps",
+  publicDir: "../world-server/maps",
   define: { global: "globalThis", ...anchorBrowserDefine },
   optimizeDeps: {
     // Vite pre-bundles the dynamic Pyth receiver import separately from app transforms.

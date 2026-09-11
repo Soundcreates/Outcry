@@ -134,7 +134,7 @@ async function mapFiles(directory) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const paths = await mapFiles("maps");
+  const paths = await mapFiles("apps/world-server/maps");
   if (!paths.length) throw new Error("No Tiled maps found");
   for (const path of paths) await validateFile(path);
   console.log(`map validation: ${paths.length}/${paths.length} map(s) passed`);

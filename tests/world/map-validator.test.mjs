@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { validateMap } from "../../tools/validate-maps.mjs";
 
-const valid = JSON.parse(await readFile("maps/wall-street/world.tmj", "utf8"));
+const valid = JSON.parse(await readFile("apps/world-server/maps/wall-street/world.tmj", "utf8"));
 assert.deepEqual(validateMap(valid), []);
 
 function layer(map, name) {
