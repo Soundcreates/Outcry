@@ -65,6 +65,10 @@ const INIT_PRIVATE_QUOTE_PERMISSION_DISCRIMINATOR = instructionDiscriminator("in
 const DEVNET_TEE_VALIDATOR = new PublicKey("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo");
 const TEE_FEE_PAYER_TARGET_LAMPORTS = 10_000_000;
 const TEE_FEE_PAYER_STORAGE_PREFIX = "outcry:tee-fee-payer:";
+const EPHEMERAL_PERMISSION_DISCRIMINATOR = 1;
+const EPHEMERAL_PERMISSION_HEADER_SIZE = 35;
+const EPHEMERAL_PERMISSION_MEMBER_SIZE = 33;
+const EPHEMERAL_PERMISSION_MIN_SIZE = 101;
 
 export type PrivateInventoryWallet = {
   publicKey: PublicKey | null;
@@ -324,6 +328,21 @@ function assertPrivateAccount(input: {
   }
 }
 
+export function isValidPrivatePermission(
+  info: { owner: PublicKey; data: Uint8Array } | null | undefined,
+  permissionedAccount: PublicKey,
+) {
+  if (!info?.owner.equals(PERMISSION_PROGRAM_ID)) return false;
+  const data = info.data;
+  if (data.length < EPHEMERAL_PERMISSION_MIN_SIZE
+    || data[0] !== EPHEMERAL_PERMISSION_DISCRIMINATOR
+    || data[34] !== 1
+    || (data.length - EPHEMERAL_PERMISSION_HEADER_SIZE) % EPHEMERAL_PERMISSION_MEMBER_SIZE !== 0) {
+    return false;
+  }
+  return new PublicKey(data.slice(2, 34)).equals(permissionedAccount);
+}
+
 export function createInitializePrivateInventoryInstruction(input: {
   matchAddress: PublicKey;
   player: PublicKey;
@@ -490,7 +509,7 @@ export async function ensurePrivateQuote(input: PrivateQuoteSetupInput) {
   });
   const permission = privatePermissionPda(quote);
   const permissionInfo = await session.connection.getAccountInfo(permission, "confirmed");
-  if (!permissionInfo?.lamports) {
+  if (!permissionInfo) {
     await sendTeeTransaction({
       connection: session.connection,
       wallet: input.wallet,
@@ -508,6 +527,8 @@ export async function ensurePrivateQuote(input: PrivateQuoteSetupInput) {
       publicKey: input.dealer,
       signMessage: async (message) => signedMessage(input.wallet, message),
     });
+  } else if (!isValidPrivatePermission(permissionInfo, quote)) {
+    throw new Error("private_quote_permission_invalid");
   }
   return { connection: session.connection, feePayer, expiresAt: session.expiresAt };
 }
@@ -761,13 +782,20 @@ async function initializePrivateInventoryPermission(input: {
   player: PublicKey;
   programId: PublicKey;
 }) {
-  await sendTeeTransaction({
-    connection: input.connection,
-    wallet: input.wallet,
-    feePayer: input.feePayer,
-    label: "private_inventory_permission",
-    instructions: [createInitPrivateInventoryPermissionInstruction(input)],
-  });
+  const inventory = privateInventoryPda({ matchAddress: input.matchAddress, player: input.player, programId: input.programId });
+  const permission = privatePermissionPda(inventory);
+  const permissionInfo = await input.connection.getAccountInfo(permission, "confirmed");
+  if (!permissionInfo) {
+    await sendTeeTransaction({
+      connection: input.connection,
+      wallet: input.wallet,
+      feePayer: input.feePayer,
+      label: "private_inventory_permission",
+      instructions: [createInitPrivateInventoryPermissionInstruction(input)],
+    });
+  } else if (!isValidPrivatePermission(permissionInfo, inventory)) {
+    throw new Error("private_inventory_permission_invalid");
+  }
 }
 
 export async function sendTeeTransaction(input: {

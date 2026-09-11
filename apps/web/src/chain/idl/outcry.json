@@ -4019,6 +4019,11 @@
       "code": 6057,
       "name": "InvalidRoundCount",
       "msg": "round count must be between one and eight"
+    },
+    {
+      "code": 6058,
+      "name": "InvalidPrivatePermission",
+      "msg": "private permission account is malformed or does not match its private account"
     }
   ],
   "types": [

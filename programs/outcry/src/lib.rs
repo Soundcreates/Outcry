@@ -26,6 +26,7 @@ pub const LEGACY_MATCH_SPACE: usize = 372;
 pub const PREVIOUS_MATCH_SPACE: usize = 373;
 pub const NO_RESOLVED_ROUND: u8 = u8::MAX;
 pub const MIN_PLAYERS_TO_START: u8 = 2;
+const EPHEMERAL_PERMISSION_DISCRIMINATOR: u8 = 1;
 pub const MATCH_WAITING: u8 = 0;
 pub const MATCH_STARTED: u8 = 1;
 pub const MATCH_FINISHED: u8 = 2;
@@ -714,7 +715,7 @@ pub mod outcry {
     }
 
     pub fn init_private_quote_permission(ctx: Context<PrivateQuotePermission>) -> Result<()> {
-        if ctx.accounts.permission.lamports() > 0 {
+        if private_permission_is_initialized(&ctx.accounts.permission.to_account_info(), ctx.accounts.quote.key())? {
             return Ok(());
         }
         let signers = [PRIVATE_QUOTE_SEED, ctx.accounts.quote.match_key.as_ref(), &[ctx.accounts.quote.round], ctx.accounts.quote.authority.as_ref(), &[ctx.bumps.quote]];
@@ -732,7 +733,7 @@ pub mod outcry {
     }
 
     pub fn init_private_inventory_permission(ctx: Context<PrivateInventoryPermission>) -> Result<()> {
-        if ctx.accounts.permission.lamports() > 0 {
+        if private_permission_is_initialized(&ctx.accounts.permission.to_account_info(), ctx.accounts.inventory.key())? {
             return Ok(());
         }
         let signers = [PRIVATE_INVENTORY_SEED, ctx.accounts.inventory.match_key.as_ref(), ctx.accounts.inventory.authority.as_ref(), &[ctx.bumps.inventory]];
@@ -1213,6 +1214,32 @@ fn prefund_ephemeral_permission<'info>(
         ephemeral_rollups_sdk::ephemeral_accounts::rent(EphemeralPermission::size_of(1) as u32),
     )?;
     Ok(())
+}
+
+fn private_permission_is_initialized(permission: &AccountInfo, permissioned_account: Pubkey) -> Result<bool> {
+    let data = permission.try_borrow_data()?;
+    if data.is_empty() {
+        return Ok(false);
+    }
+    require_keys_eq!(*permission.owner, PERMISSION_PROGRAM_ID, ErrorCode::InvalidPrivatePermission);
+    require!(
+        is_valid_private_permission_data(&data, permissioned_account),
+        ErrorCode::InvalidPrivatePermission,
+    );
+    Ok(true)
+}
+
+fn is_valid_private_permission_data(data: &[u8], permissioned_account: Pubkey) -> bool {
+    if data.len() < EphemeralPermission::size_of(1) {
+        return false;
+    }
+    let Ok(permission) = EphemeralPermission::from_bytes(data) else {
+        return false;
+    };
+    permission.discriminator == EPHEMERAL_PERMISSION_DISCRIMINATOR
+        && permission.permissioned_account == permissioned_account
+        && permission.private
+        && !permission.members.is_empty()
 }
 
 fn private_members(authority: Pubkey) -> EphemeralMembersArgs {
@@ -2223,6 +2250,8 @@ pub enum ErrorCode {
     RfqStateCommitDisabled,
     #[msg("round count must be between one and eight")]
     InvalidRoundCount,
+    #[msg("private permission account is malformed or does not match its private account")]
+    InvalidPrivatePermission,
 }
 
 #[cfg(test)]
@@ -2246,6 +2275,24 @@ mod tests {
             last_resolved_round: NO_RESOLVED_ROUND,
             last_round_winner: Pubkey::default(),
         }
+    }
+
+    #[test]
+    fn private_permission_validation_accepts_zero_lamport_wire_state() {
+        let permissioned_account = Pubkey::new_unique();
+        let authority = Pubkey::new_unique();
+        let mut data = vec![0u8; EphemeralPermission::size_of(1)];
+        data[0] = EPHEMERAL_PERMISSION_DISCRIMINATOR;
+        data[2..34].copy_from_slice(permissioned_account.as_ref());
+        data[34] = 1;
+        data[35] = TX_LOGS_FLAG | TX_MESSAGE_FLAG | TX_BALANCES_FLAG;
+        data[36..68].copy_from_slice(authority.as_ref());
+
+        assert!(is_valid_private_permission_data(&data, permissioned_account));
+        data[34] = 0;
+        assert!(!is_valid_private_permission_data(&data, permissioned_account));
+        data[34] = 1;
+        assert!(!is_valid_private_permission_data(&data, Pubkey::new_unique()));
     }
 
     fn open_round(quote_count: u8, deadline: i64) -> RfqRound {

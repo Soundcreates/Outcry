@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Keypair } from "@solana/web3.js";
-import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
+import { DELEGATION_PROGRAM_ID, PERMISSION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import {
   assertPrivateReadAccess,
   canReadPrivateAccount,
@@ -15,6 +15,7 @@ import {
   privatePermissionPda,
   privateQuotePda,
   readOwnPrivateInventory,
+  isValidPrivatePermission,
 } from "./privacy";
 import outcryIdl from "./idl/outcry.json";
 
@@ -144,6 +145,18 @@ const delegatedInventoryConnection = {
 const delegatedInventory = await readOwnPrivateInventory({ connection: delegatedInventoryConnection, matchAddress: match, player: alice, programId: program });
 assert.equal(delegatedInventory.playerAddress, alice.toBase58());
 
+const permissionData = new Uint8Array(101);
+permissionData[0] = 1;
+permissionData.set(aliceInventory.account.toBytes(), 2);
+permissionData[34] = 1;
+permissionData[35] = 0b1110;
+permissionData.set(alice.toBytes(), 36);
+assert.equal(isValidPrivatePermission({ owner: PERMISSION_PROGRAM_ID, data: permissionData }, aliceInventory.account), true);
+assert.equal(isValidPrivatePermission({ owner: PERMISSION_PROGRAM_ID, data: permissionData }, bobInventory.account), false);
+assert.equal(isValidPrivatePermission({ owner: spectator, data: permissionData }, aliceInventory.account), false);
+permissionData[34] = 0;
+assert.equal(isValidPrivatePermission({ owner: PERMISSION_PROGRAM_ID, data: permissionData }, aliceInventory.account), false);
+
 const initializeInventory = createInitializePrivateInventoryInstruction({ matchAddress: match, player: alice, programId: program });
 assert.equal(initializeInventory.keys[0].pubkey.equals(aliceInventory.account), true);
 assert.equal(initializeInventory.keys[2].isSigner, true);
@@ -178,7 +191,8 @@ assert.match(privateQuotePanelSource, /browserBaseRpc/);
 assert.match(privateInventoryPanelSource, /wallet\.signTransaction/);
 assert.match(privacySource, /ensureTeeFeePayer/);
 assert.match(privacySource, /waitForPrivateQuoteOnTee/);
-assert.match(privacySource, /permissionInfo\?\.lamports/);
+assert.doesNotMatch(privacySource, /permissionInfo\?\.lamports/);
+assert.match(privacySource, /isValidPrivatePermission/);
 assert.match(privacySource, /feePayer: input\.feePayer/);
 assert.match(privacySource, /preparePrivateQuote/);
 assert.match(privacySource, /getPreparedPrivateQuote/);
