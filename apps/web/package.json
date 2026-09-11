@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "overrides": {
+    "jito-ts": {
+      "@solana/web3.js": "1.98.4"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
