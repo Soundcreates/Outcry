@@ -281,8 +281,7 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
     const result = this.seating.confirm(client.sessionId);
     if (result.accepted) {
       const player = this.state.players.get(client.sessionId);
-      if (player) player.mode = "SEATED";
-      this.syncSeat(result.seat);
+      if (player) this.seatPlayer(client.sessionId, player, result.seat);
     }
     this.sendSeatResult(client, result);
   }

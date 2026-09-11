@@ -10,6 +10,8 @@ assert.match(source, /refreshActiveMatch/);
 assert.match(source, /if \(seatIndex === undefined\) return;/);
 assert.match(source, /canRebindPendingSeat/);
 assert.match(source, /this\.reservePlayer\(player, result\.seat\)/);
+assert.match(source, /this\.seatPlayer\(client\.sessionId, player, result\.seat\)/);
+assert.doesNotMatch(source, /if \(player\) player\.mode = "SEATED"/);
 assert.match(source, /player\.mode = "RESERVING"/);
 assert.match(source, /RECONNECTION_GRACE_SECONDS = 30/);
 assert.match(source, /onMessage\("chat"/);
