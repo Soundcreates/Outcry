@@ -5,7 +5,7 @@ This is the Phase 0 boundary freeze from the technical Bible.
 | Concern | Single authority |
 |---|---|
 | Tiled map geometry | Static map assets |
-| World presence, movement, seats, leases | Colyseus world server |
+| World presence, movement, physical seats, leases | Colyseus world server |
 | Video/audio transport | LiveKit |
 | Speech transcription and parsing | STT/client draft only |
 | Private RFQ, quotes, inventory, fast game resolution | MagicBlock PER |
@@ -17,4 +17,5 @@ Hard boundaries:
 - The frontend sends requests; it is never canonical.
 - STT cannot sign or submit transactions.
 - Movement never goes onchain.
+- Match membership is onchain; the physical map seat is not an onchain seat index.
 - Private game actions fail closed when verified PER access is unavailable.

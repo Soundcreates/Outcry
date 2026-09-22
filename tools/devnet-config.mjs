@@ -1,8 +1,8 @@
 import { PublicKey } from "@solana/web3.js";
 
 export const DEFAULT_DEVNET_RPC = "https://api.devnet.solana.com";
-export const MAGICBLOCK_PYTH_ORACLE_PROGRAM_ID = new PublicKey("PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd");
-export const MAGICBLOCK_PYTH_SOL_USD_FEED = new PublicKey("ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu");
+export const MAGICBLOCK_PYTH_ORACLE_PROGRAM_ID = new PublicKey("rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ");
+export const MAGICBLOCK_PYTH_SOL_USD_FEED = new PublicKey("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
 export const MAGICBLOCK_PYTH_SOL_USD_FEED_ID = Uint8Array.from(
   "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d".match(/../g).map((value) => Number.parseInt(value, 16)),
 );

@@ -16,7 +16,7 @@ const FEATURES = [
   {
     title: "Wallet-gated match entry",
     body:
-      "Every seat is checked against your wallet, the match account, and the seat index before the trading room even opens.",
+      "Every seat is checked by the world server, while the match account independently verifies wallet membership before the trading room opens.",
   },
   {
     title: "Live trading matches",

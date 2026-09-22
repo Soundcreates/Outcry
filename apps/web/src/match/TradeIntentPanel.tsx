@@ -9,6 +9,7 @@ type Props = {
   sessionId?: string;
   onConfirm?: (intent: TradeIntent) => void;
   onSubmit?: (intent: TradeIntent) => Promise<void>;
+  onRecoverSession?: () => Promise<void>;
   submissionStatus?: string;
 };
 
@@ -29,14 +30,18 @@ function speechError(reason: unknown) {
 
 function rfqError(reason: unknown) {
   const detail = reason instanceof Error ? reason.message : String(reason);
-  if (/pyth_not_configured/i.test(detail)) return "Pyth price updates are not configured on the world server.";
-  if (/pyth_rate_limited|rfq_base_rpc_rate_limited|429|too many requests/i.test(detail)) return "Price or Base RPC is rate-limiting this RFQ. Wait a moment, then retry.";
-  if (/rfq_pyth_build_failed.*process is not defined/i.test(detail)) return "Pyth's browser SDK did not initialize. Restart the web app, then retry the RFQ.";
-  if (/rfq_pyth_(build|simulation|wallet|confirmation)_failed/i.test(detail)) return "The verified price update could not be posted. Retry the RFQ and approve each wallet prompt.";
+  if (/rfq_base_rpc_rate_limited|429|too many requests/i.test(detail)) return "Base RPC is rate-limiting this RFQ. Wait a moment, then retry.";
+  if (/session_expired/i.test(detail)) return "Your authorized session expired. Renew it once, then submit this RFQ again.";
+  if (/session_invalid/i.test(detail)) return "This browser no longer has a valid session key. Rejoin setup to authorize a new session.";
+  if (/session_action_not_allowed/i.test(detail)) return "Your session is not authorized to open RFQs. Rejoin setup to restore the correct permissions.";
+  if (/relayer_not_configured|relayer_keypair_invalid/i.test(detail)) return "The server relayer has no usable signer. Ask the host to configure and fund the Devnet relayer.";
+  if (/oracle_push_feed_unavailable|oracle_stale|oracle_invalid/i.test(detail)) return "The sponsored Pyth push feed is unavailable or stale. Retry shortly; the host can check the world-server health endpoint.";
+  if (/oracle_not_initialized|oracle_owner_invalid/i.test(detail)) return "The match Oracle account is not initialized correctly. The host must complete match setup before opening an RFQ.";
+  if (/oracle_relayer_unreachable|oracle_relayer_failed|relayer_rpc_failed|relayer_simulation_failed|relayer_confirmation_failed/i.test(detail)) return "The push-feed oracle refresh could not be posted on Solana. Retry shortly; the host can check relayer funding and RPC health.";
   return detail || "rfq_submit_failed";
 }
 
-export default function TradeIntentPanel({ active, matchId, role = "PLAYER", sessionId, onConfirm, onSubmit, submissionStatus }: Props) {
+export default function TradeIntentPanel({ active, matchId, role = "PLAYER", sessionId, onConfirm, onSubmit, onRecoverSession, submissionStatus }: Props) {
   const recorderRef = useRef<MediaRecorder | undefined>(undefined);
   const streamRef = useRef<MediaStream | undefined>(undefined);
   const chunksRef = useRef<Blob[]>([]);
@@ -51,6 +56,7 @@ export default function TradeIntentPanel({ active, matchId, role = "PLAYER", ses
   const [confirmed, setConfirmed] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [recoveringSession, setRecoveringSession] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => () => {
@@ -189,6 +195,19 @@ export default function TradeIntentPanel({ active, matchId, role = "PLAYER", ses
     }
   };
 
+  const recoverSession = async () => {
+    if (!onRecoverSession) return;
+    setRecoveringSession(true);
+    setError("");
+    try {
+      await onRecoverSession();
+    } catch (reason) {
+      setError(rfqError(reason));
+    } finally {
+      setRecoveringSession(false);
+    }
+  };
+
   return (
     <section className="trade-intent" aria-label="Trade intent draft">
       <div className="trade-intent-heading">
@@ -205,13 +224,29 @@ export default function TradeIntentPanel({ active, matchId, role = "PLAYER", ses
           {starting ? "Preparing microphone…" : transcribing ? "Transcribing…" : listening ? "Stop voice command" : "Start voice command"}
         </button>
         <form onSubmit={(event) => { event.preventDefault(); parse(input); }}>
-          <input aria-label="Typed trade intent" onChange={(event) => setInput(event.target.value)} placeholder="buy two SOL" value={input} />
+          <input
+            aria-label="Typed trade intent"
+            autoCapitalize="none"
+            autoComplete="off"
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => event.stopPropagation()}
+            onKeyUp={(event) => event.stopPropagation()}
+            placeholder="buy two SOL"
+            spellCheck={false}
+            type="text"
+            value={input}
+          />
           <button type="submit">Parse typed</button>
         </form>
       </div>
       {transcript && <p className="trade-transcript">Transcript: “{transcript}”</p>}
       {submitting && submissionStatus && <p className="trade-transcript" role="status">{submissionStatus}</p>}
       {error && <p className="trade-intent-error" role="alert">{error}</p>}
+      {/session expired/i.test(error) && onRecoverSession && (
+        <button disabled={recoveringSession} onClick={() => void recoverSession()} type="button">
+          {recoveringSession ? "Renewing session…" : "Renew session"}
+        </button>
+      )}
       {draft && (
         <div className="trade-confirmation">
           <span>Confirm {draft.side === "BUY" ? "bid" : "ask"}: {draft.quantity} SOL / USDC?</span>

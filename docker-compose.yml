@@ -5,3 +5,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${WORLD_SERVER_PORT:-2567}:2567"
+    env_file:
+      - .env
+    environment:
+      OUTCRY_RELAYER_KEYPAIR_PATH: /run/secrets/outcry-relayer-devnet.json
+      OUTCRY_TEE_RELAYER_KEYPAIR_PATH: /run/secrets/outcry-tee-relayer-devnet.json
+    volumes:
+      - ./.secrets/outcry-relayer-devnet.json:/run/secrets/outcry-relayer-devnet.json:ro
+      - ./.secrets/outcry-tee-relayer-devnet.json:/run/secrets/outcry-tee-relayer-devnet.json:ro

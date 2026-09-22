@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { PublicMatchSnapshot } from "../chain/matchState";
+import { currentRoundTaker, type PublicMatchSnapshot } from "../chain/matchState";
 
 type Props = {
   snapshot?: PublicMatchSnapshot;
@@ -55,14 +55,16 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
   }
 
   const remaining = snapshot.deadlineAt ? Math.max(0, Math.ceil((snapshot.deadlineAt - now) / 1000)) : undefined;
-  const localIsTaker = Boolean(walletAddress && snapshot.taker === walletAddress);
+  const roundInProgress = snapshot.roundStatus === "PREPARED" || snapshot.roundStatus === "OPEN";
+  const currentTaker = roundInProgress ? currentRoundTaker(snapshot) : undefined;
+  const localIsTaker = Boolean(walletAddress && currentTaker === walletAddress);
   const localIsHost = Boolean(walletAddress && snapshot.host === walletAddress);
   const canStart = localIsHost && snapshot.status === "WAITING" && snapshot.playerCount >= 2;
   const liveRoundStateAvailable = snapshot.stateSource !== "tee-unavailable";
   const quoteDeadlinePassed = remaining === 0;
-  const canResolve = liveRoundStateAvailable && snapshot.stateSource === "tee" && localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount > 0 && (snapshot.quoteCount >= snapshot.dealerCount || quoteDeadlinePassed);
-  const canSkipEmptyRound = liveRoundStateAvailable && snapshot.stateSource === "tee" && localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount === 0 && quoteDeadlinePassed;
-  const canResumeSkippedRound = liveRoundStateAvailable && snapshot.stateSource === "tee" && localIsHost && snapshot.status === "STARTED" && snapshot.roundStatus === "SKIPPED" && snapshot.quoteCount === 0;
+  const canResolve = liveRoundStateAvailable && snapshot.stateSource === "tee" && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount > 0 && (snapshot.quoteCount >= snapshot.dealerCount || quoteDeadlinePassed);
+  const canSkipEmptyRound = liveRoundStateAvailable && snapshot.stateSource === "tee" && snapshot.status === "STARTED" && snapshot.roundStatus === "OPEN" && snapshot.quoteCount === 0 && quoteDeadlinePassed;
+  const canResumeSkippedRound = liveRoundStateAvailable && snapshot.stateSource === "tee" && snapshot.status === "STARTED" && snapshot.roundStatus === "SKIPPED" && snapshot.quoteCount === 0;
   const finalScores = snapshot.finalScoresE6?.slice(0, snapshot.playerCount) ?? [];
   const localIndex = walletAddress ? snapshot.players.indexOf(walletAddress) : -1;
   const localScore = localIndex >= 0 ? finalScores[localIndex] : undefined;
@@ -77,7 +79,7 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
         <strong className={localIsHost ? "hud-host" : "hud-muted"}>
           {localIsHost ? "YOU ARE THE HOST" : `HOST: ${shortKey(snapshot.host)}`}
         </strong>
-        <span className="hud-muted">{snapshot.playerCount}/{snapshot.capacity} onchain players seated</span>
+        <span className="hud-muted">{snapshot.playerCount}/{snapshot.capacity} onchain players joined</span>
       </div>
       <div className="match-hud-topline">
         <div>
@@ -86,13 +88,13 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
         </div>
         <span className={localIsTaker ? "hud-taker" : "hud-muted"} role="status">
           {localIsTaker
-            ? "YOUR TURN · START VOICE"
+            ? snapshot.roundStatus === "PREPARED" ? "YOUR TURN · OPEN RFQ" : "YOUR TURN · START VOICE"
             : snapshot.status === "WAITING" && localIsHost
               ? "HOST · READY TO START"
               : snapshot.status === "WAITING"
                 ? `WAITING FOR HOST ${shortKey(snapshot.host)}`
-                : snapshot.status === "STARTED" && snapshot.taker
-                  ? `WAITING FOR ${shortKey(snapshot.taker)}`
+                : snapshot.status === "STARTED" && currentTaker
+                  ? `WAITING FOR ${shortKey(currentTaker)}`
                   : "WAITING FOR MATCH STATE"}
         </span>
       </div>
@@ -170,9 +172,9 @@ export default function MatchHud({ snapshot, walletAddress, error, settling, res
           {snapshot.settled ? <>
             <strong>Settled</strong>
             {onReturn && <button onClick={onReturn} type="button">Return to floor</button>}
-          </> : snapshot.winner === walletAddress && onSettle ? (
+          </> : onSettle ? (
             <button disabled={settling} onClick={() => void onSettle()} type="button">
-              {settling ? "Settling…" : "Settle payout"}
+              {settling ? "Settling…" : "Settle payout (relayer)"}
             </button>
           ) : null}
         </div>

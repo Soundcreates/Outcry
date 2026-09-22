@@ -8,6 +8,49 @@
   },
   "instructions": [
     {
+      "name": "advance_round",
+      "discriminator": [
+        230,
+        88,
+        119,
+        80,
+        54,
+        4,
+        212,
+        250
+      ],
+      "accounts": [
+        {
+          "name": "match_state"
+        },
+        {
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "authorize_session",
       "discriminator": [
         187,
@@ -79,244 +122,6 @@
           "type": "u8"
         }
       ]
-    },
-    {
-      "name": "close_private_inventory_permission",
-      "discriminator": [
-        214,
-        219,
-        48,
-        177,
-        5,
-        33,
-        139,
-        255
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "inventory"
-          ]
-        },
-        {
-          "name": "inventory",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  105,
-                  110,
-                  118,
-                  101,
-                  110,
-                  116,
-                  111,
-                  114,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "inventory.match_key",
-                "account": "PrivateInventory"
-              },
-              {
-                "kind": "account",
-                "path": "inventory.authority",
-                "account": "PrivateInventory"
-              }
-            ]
-          }
-        },
-        {
-          "name": "permission",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  101,
-                  114,
-                  109,
-                  105,
-                  115,
-                  115,
-                  105,
-                  111,
-                  110,
-                  58
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "inventory"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                136,
-                161,
-                10,
-                196,
-                33,
-                152,
-                1,
-                214,
-                246,
-                106,
-                29,
-                60,
-                6,
-                152,
-                192,
-                102,
-                169,
-                175,
-                212,
-                217,
-                180,
-                252,
-                231,
-                71,
-                151,
-                141,
-                209,
-                5,
-                168,
-                212,
-                103,
-                82
-              ]
-            }
-          }
-        },
-        {
-          "name": "permission_program",
-          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
-        },
-        {
-          "name": "ephemeral_vault",
-          "writable": true,
-          "address": "MagicVau1t999999999999999999999999999999999"
-        },
-        {
-          "name": "magic_program",
-          "address": "Magic11111111111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "close_private_quote_permission",
-      "discriminator": [
-        149,
-        58,
-        50,
-        18,
-        219,
-        59,
-        245,
-        63
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "quote"
-          ]
-        },
-        {
-          "name": "quote",
-          "writable": true
-        },
-        {
-          "name": "permission",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  101,
-                  114,
-                  109,
-                  105,
-                  115,
-                  115,
-                  105,
-                  111,
-                  110,
-                  58
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "quote"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                136,
-                161,
-                10,
-                196,
-                33,
-                152,
-                1,
-                214,
-                246,
-                106,
-                29,
-                60,
-                6,
-                152,
-                192,
-                102,
-                169,
-                175,
-                212,
-                217,
-                180,
-                252,
-                231,
-                71,
-                151,
-                141,
-                209,
-                5,
-                168,
-                212,
-                103,
-                82
-              ]
-            }
-          }
-        },
-        {
-          "name": "permission_program",
-          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
-        },
-        {
-          "name": "ephemeral_vault",
-          "writable": true,
-          "address": "MagicVau1t999999999999999999999999999999999"
-        },
-        {
-          "name": "magic_program",
-          "address": "Magic11111111111111111111111111111111111111"
-        }
-      ],
-      "args": []
     },
     {
       "name": "commit_private_inventory",
@@ -404,7 +209,31 @@
         },
         {
           "name": "quote",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "quote.match_key",
+                "account": "PrivateQuote"
+              },
+              {
+                "kind": "account",
+                "path": "quote.authority",
+                "account": "PrivateQuote"
+              }
+            ]
+          }
         },
         {
           "name": "magic_fee_vault",
@@ -423,16 +252,16 @@
       "args": []
     },
     {
-      "name": "commit_rfq_state",
+      "name": "commit_runtime",
       "discriminator": [
-        234,
-        88,
-        14,
+        191,
+        122,
+        5,
+        4,
         210,
-        19,
-        134,
-        237,
-        126
+        66,
+        82,
+        31
       ],
       "accounts": [
         {
@@ -441,33 +270,26 @@
           "signer": true
         },
         {
-          "name": "match_state",
-          "writable": true
-        },
-        {
-          "name": "round",
-          "writable": true
-        },
-        {
-          "name": "oracle",
+          "name": "runtime",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  111,
                   114,
-                  97,
-                  99,
-                  108,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
                   101
                 ]
               },
               {
                 "kind": "account",
-                "path": "oracle.feed_id",
-                "account": "OraclePrice"
+                "path": "runtime.match_key",
+                "account": "MatchRuntime"
               }
             ]
           }
@@ -517,7 +339,10 @@
                   97,
                   116,
                   99,
-                  104
+                  104,
+                  95,
+                  118,
+                  50
                 ]
               },
               {
@@ -527,6 +352,30 @@
               {
                 "kind": "arg",
                 "path": "match_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
               }
             ]
           }
@@ -546,410 +395,8 @@
       ],
       "args": [
         {
-          "name": "match_nonce",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "delegate_match",
-      "discriminator": [
-        30,
-        116,
-        9,
-        69,
-        147,
-        61,
-        133,
-        238
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "signer": true
-        },
-        {
-          "name": "buffer_match_state",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  117,
-                  102,
-                  102,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_state"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                178,
-                197,
-                217,
-                160,
-                223,
-                227,
-                156,
-                212,
-                209,
-                108,
-                212,
-                253,
-                83,
-                10,
-                40,
-                86,
-                106,
-                238,
-                170,
-                74,
-                225,
-                14,
-                19,
-                101,
-                34,
-                150,
-                5,
-                241,
-                42,
-                122,
-                160,
-                119
-              ]
-            }
-          }
-        },
-        {
-          "name": "delegation_record_match_state",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  101,
-                  108,
-                  101,
-                  103,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_state"
-              }
-            ],
-            "program": {
-              "kind": "account",
-              "path": "delegation_program"
-            }
-          }
-        },
-        {
-          "name": "delegation_metadata_match_state",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  101,
-                  108,
-                  101,
-                  103,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110,
-                  45,
-                  109,
-                  101,
-                  116,
-                  97,
-                  100,
-                  97,
-                  116,
-                  97
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_state"
-              }
-            ],
-            "program": {
-              "kind": "account",
-              "path": "delegation_program"
-            }
-          }
-        },
-        {
-          "name": "match_state",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  97,
-                  116,
-                  99,
-                  104
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "pit"
-              },
-              {
-                "kind": "arg",
-                "path": "match_nonce"
-              }
-            ]
-          }
-        },
-        {
-          "name": "validator",
-          "optional": true
-        },
-        {
-          "name": "owner_program",
-          "address": "D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt"
-        },
-        {
-          "name": "delegation_program",
-          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "_pit",
-          "type": "pubkey"
-        },
-        {
           "name": "_match_nonce",
           "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "delegate_oracle",
-      "discriminator": [
-        192,
-        135,
-        82,
-        45,
-        58,
-        203,
-        33,
-        133
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "signer": true
-        },
-        {
-          "name": "buffer_oracle",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  117,
-                  102,
-                  102,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "oracle"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                178,
-                197,
-                217,
-                160,
-                223,
-                227,
-                156,
-                212,
-                209,
-                108,
-                212,
-                253,
-                83,
-                10,
-                40,
-                86,
-                106,
-                238,
-                170,
-                74,
-                225,
-                14,
-                19,
-                101,
-                34,
-                150,
-                5,
-                241,
-                42,
-                122,
-                160,
-                119
-              ]
-            }
-          }
-        },
-        {
-          "name": "delegation_record_oracle",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  101,
-                  108,
-                  101,
-                  103,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "oracle"
-              }
-            ],
-            "program": {
-              "kind": "account",
-              "path": "delegation_program"
-            }
-          }
-        },
-        {
-          "name": "delegation_metadata_oracle",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  101,
-                  108,
-                  101,
-                  103,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110,
-                  45,
-                  109,
-                  101,
-                  116,
-                  97,
-                  100,
-                  97,
-                  116,
-                  97
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "oracle"
-              }
-            ],
-            "program": {
-              "kind": "account",
-              "path": "delegation_program"
-            }
-          }
-        },
-        {
-          "name": "oracle",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  114,
-                  97,
-                  99,
-                  108,
-                  101
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "feed_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "validator",
-          "optional": true
-        },
-        {
-          "name": "owner_program",
-          "address": "D2rYtfu8x3CxJ89YoAUrWbfiMGhFbAtE9Hq8RNoJaUZt"
-        },
-        {
-          "name": "delegation_program",
-          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "feed_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
         }
       ]
     },
@@ -967,7 +414,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "payer",
           "signer": true
         },
         {
@@ -1173,7 +620,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "payer",
           "signer": true
         },
         {
@@ -1309,7 +756,29 @@
         },
         {
           "name": "quote",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "match_key"
+              },
+              {
+                "kind": "arg",
+                "path": "dealer"
+              }
+            ]
+          }
         },
         {
           "name": "validator",
@@ -1334,34 +803,30 @@
           "type": "pubkey"
         },
         {
-          "name": "round",
-          "type": "u8"
-        },
-        {
           "name": "dealer",
           "type": "pubkey"
         }
       ]
     },
     {
-      "name": "delegate_round",
+      "name": "delegate_runtime",
       "discriminator": [
-        4,
-        60,
-        37,
-        224,
-        19,
-        130,
-        106,
-        111
+        67,
+        199,
+        221,
+        168,
+        34,
+        75,
+        166,
+        251
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "payer",
           "signer": true
         },
         {
-          "name": "buffer_round_state",
+          "name": "buffer_runtime",
           "writable": true,
           "pda": {
             "seeds": [
@@ -1378,7 +843,7 @@
               },
               {
                 "kind": "account",
-                "path": "round_state"
+                "path": "runtime"
               }
             ],
             "program": {
@@ -1421,7 +886,7 @@
           }
         },
         {
-          "name": "delegation_record_round_state",
+          "name": "delegation_record_runtime",
           "writable": true,
           "pda": {
             "seeds": [
@@ -1442,7 +907,7 @@
               },
               {
                 "kind": "account",
-                "path": "round_state"
+                "path": "runtime"
               }
             ],
             "program": {
@@ -1452,7 +917,7 @@
           }
         },
         {
-          "name": "delegation_metadata_round_state",
+          "name": "delegation_metadata_runtime",
           "writable": true,
           "pda": {
             "seeds": [
@@ -1482,7 +947,7 @@
               },
               {
                 "kind": "account",
-                "path": "round_state"
+                "path": "runtime"
               }
             ],
             "program": {
@@ -1492,8 +957,28 @@
           }
         },
         {
-          "name": "round_state",
-          "writable": true
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "match_key"
+              }
+            ]
+          }
         },
         {
           "name": "validator",
@@ -1516,42 +1001,169 @@
         {
           "name": "match_key",
           "type": "pubkey"
-        },
-        {
-          "name": "round",
-          "type": "u8"
         }
       ]
     },
     {
-      "name": "finalize_scores",
+      "name": "finalize_match",
       "discriminator": [
-        92,
-        183,
-        9,
-        211,
-        46,
-        171,
-        19,
-        29
+        6,
+        103,
+        47,
+        7,
+        66,
+        1,
+        85,
+        207
+      ],
+      "accounts": [
+        {
+          "name": "match_state",
+          "writable": true
+        },
+        {
+          "name": "runtime",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "result",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "finalize_runtime",
+      "discriminator": [
+        4,
+        14,
+        138,
+        145,
+        24,
+        103,
+        147,
+        227
       ],
       "accounts": [
         {
           "name": "match_state"
         },
         {
-          "name": "result",
-          "writable": true
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
         },
         {
-          "name": "oracle"
-        },
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "match_state"
-          ]
+          "name": "oracle",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  239,
+                  13,
+                  139,
+                  111,
+                  218,
+                  44,
+                  235,
+                  164,
+                  29,
+                  161,
+                  93,
+                  64,
+                  149,
+                  209,
+                  218,
+                  57,
+                  42,
+                  13,
+                  47,
+                  142,
+                  208,
+                  198,
+                  199,
+                  188,
+                  15,
+                  76,
+                  250,
+                  200,
+                  194,
+                  128,
+                  181,
+                  109
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -1570,11 +1182,45 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "inventory"
-          ]
+          "name": "match_state"
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "session_signer",
+          "signer": true
+        },
+        {
+          "name": "session_grant",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              },
+              {
+                "kind": "account",
+                "path": "session_signer"
+              }
+            ]
+          }
         },
         {
           "name": "inventory",
@@ -1597,13 +1243,11 @@
               },
               {
                 "kind": "account",
-                "path": "inventory.match_key",
-                "account": "PrivateInventory"
+                "path": "match_state"
               },
               {
                 "kind": "account",
-                "path": "inventory.authority",
-                "account": "PrivateInventory"
+                "path": "authority"
               }
             ]
           }
@@ -1703,15 +1347,71 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "quote"
-          ]
+          "name": "match_state"
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "session_signer",
+          "signer": true
+        },
+        {
+          "name": "session_grant",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              },
+              {
+                "kind": "account",
+                "path": "session_signer"
+              }
+            ]
+          }
         },
         {
           "name": "quote",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
         },
         {
           "name": "permission",
@@ -1961,7 +1661,7 @@
           }
         },
         {
-          "name": "price_update"
+          "name": "price_feed"
         },
         {
           "name": "authority",
@@ -2175,7 +1875,29 @@
       "accounts": [
         {
           "name": "quote",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
         },
         {
           "name": "match_state"
@@ -2190,12 +1912,7 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": [
-        {
-          "name": "round",
-          "type": "u8"
-        }
-      ]
+      "args": []
     },
     {
       "name": "join_match",
@@ -2219,15 +1936,17 @@
           "signer": true
         }
       ],
-      "args": [
-        {
-          "name": "seat_index",
-          "type": "u8"
-        }
-      ]
+      "args": []
     },
     {
       "name": "migrate_legacy_match",
+      "docs": [
+        "Copies a safe, waiting legacy match into the V2 PDA namespace.",
+        "",
+        "In-progress legacy matches stay readable and releasable through",
+        "`release_active_match`; they are not silently rewritten because their",
+        "per-round accounts cannot be represented by the reusable V2 runtime."
+      ],
       "discriminator": [
         80,
         223,
@@ -2240,111 +1959,84 @@
       ],
       "accounts": [
         {
-          "name": "match_state",
+          "name": "pit",
           "writable": true
+        },
+        {
+          "name": "legacy_match"
+        },
+        {
+          "name": "match_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104,
+                  95,
+                  118,
+                  50
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pit"
+              },
+              {
+                "kind": "arg",
+                "path": "match_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
         },
         {
           "name": "authority",
           "writable": true,
-          "signer": true
+          "signer": true,
+          "relations": [
+            "pit"
+          ]
         },
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
-    },
-    {
-      "name": "next_round",
-      "discriminator": [
-        71,
-        165,
-        58,
-        85,
-        228,
-        54,
-        16,
-        73
-      ],
-      "accounts": [
+      "args": [
         {
-          "name": "match_state",
-          "writable": true
-        },
-        {
-          "name": "round"
-        },
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "match_state"
-          ]
+          "name": "match_nonce",
+          "type": "u64"
         }
-      ],
-      "args": []
-    },
-    {
-      "name": "next_round_session",
-      "discriminator": [
-        20,
-        191,
-        223,
-        192,
-        43,
-        0,
-        117,
-        241
-      ],
-      "accounts": [
-        {
-          "name": "match_state",
-          "writable": true
-        },
-        {
-          "name": "round"
-        },
-        {
-          "name": "authority"
-        },
-        {
-          "name": "session_signer",
-          "signer": true
-        },
-        {
-          "name": "session_grant",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  101,
-                  115,
-                  115,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_state"
-              },
-              {
-                "kind": "account",
-                "path": "authority"
-              },
-              {
-                "kind": "account",
-                "path": "session_signer"
-              }
-            ]
-          }
-        }
-      ],
-      "args": []
+      ]
     },
     {
       "name": "open_rfq",
@@ -2363,54 +2055,83 @@
           "name": "match_state"
         },
         {
-          "name": "round",
-          "writable": true
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
         },
         {
-          "name": "oracle"
-        },
-        {
-          "name": "taker",
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "side",
-          "type": "u8"
-        },
-        {
-          "name": "quantity_lots",
-          "type": "u64"
-        },
-        {
-          "name": "quote_window_seconds",
-          "type": "i64"
-        }
-      ]
-    },
-    {
-      "name": "open_rfq_session",
-      "discriminator": [
-        10,
-        99,
-        10,
-        194,
-        25,
-        167,
-        20,
-        42
-      ],
-      "accounts": [
-        {
-          "name": "match_state"
-        },
-        {
-          "name": "round",
-          "writable": true
-        },
-        {
-          "name": "oracle"
+          "name": "oracle",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  239,
+                  13,
+                  139,
+                  111,
+                  218,
+                  44,
+                  235,
+                  164,
+                  29,
+                  161,
+                  93,
+                  64,
+                  149,
+                  209,
+                  218,
+                  57,
+                  42,
+                  13,
+                  47,
+                  142,
+                  208,
+                  198,
+                  199,
+                  188,
+                  15,
+                  76,
+                  250,
+                  200,
+                  194,
+                  128,
+                  181,
+                  109
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "authority"
@@ -2449,11 +2170,6 @@
               }
             ]
           }
-        },
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
         }
       ],
       "args": [
@@ -2470,38 +2186,6 @@
           "type": "i64"
         }
       ]
-    },
-    {
-      "name": "prepare_rfq_round",
-      "discriminator": [
-        74,
-        28,
-        14,
-        237,
-        236,
-        55,
-        241,
-        164
-      ],
-      "accounts": [
-        {
-          "name": "match_state"
-        },
-        {
-          "name": "round",
-          "writable": true
-        },
-        {
-          "name": "taker",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
     },
     {
       "name": "process_undelegation",
@@ -2638,131 +2322,39 @@
       ],
       "args": [
         {
+          "name": "match_nonce",
+          "type": "u64"
+        },
+        {
           "name": "force",
           "type": "bool"
         }
       ]
     },
     {
-      "name": "resolve_round",
+      "name": "renew_session",
+      "docs": [
+        "Extends an existing session without changing its signer or permissions.",
+        "This is a wallet-authorized recovery action; routine gameplay remains",
+        "session-signed."
+      ],
       "discriminator": [
-        165,
-        114,
-        237,
-        158,
-        1,
-        36,
-        70,
-        254
+        247,
+        4,
+        156,
+        37,
+        60,
+        16,
+        86,
+        19
       ],
       "accounts": [
         {
           "name": "match_state"
-        },
-        {
-          "name": "round",
-          "writable": true
-        },
-        {
-          "name": "taker_inventory",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  105,
-                  110,
-                  118,
-                  101,
-                  110,
-                  116,
-                  111,
-                  114,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "round.match_key",
-                "account": "RfqRound"
-              },
-              {
-                "kind": "account",
-                "path": "round.taker",
-                "account": "RfqRound"
-              }
-            ]
-          }
-        },
-        {
-          "name": "resolver",
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "resolve_round_session",
-      "discriminator": [
-        144,
-        253,
-        17,
-        54,
-        72,
-        253,
-        55,
-        12
-      ],
-      "accounts": [
-        {
-          "name": "match_state"
-        },
-        {
-          "name": "round",
-          "writable": true
-        },
-        {
-          "name": "taker_inventory",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  105,
-                  110,
-                  118,
-                  101,
-                  110,
-                  116,
-                  111,
-                  114,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "round.match_key",
-                "account": "RfqRound"
-              },
-              {
-                "kind": "account",
-                "path": "round.taker",
-                "account": "RfqRound"
-              }
-            ]
-          }
-        },
-        {
-          "name": "authority"
-        },
-        {
-          "name": "session_signer",
-          "signer": true
         },
         {
           "name": "session_grant",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -2787,7 +2379,94 @@
               },
               {
                 "kind": "account",
-                "path": "session_signer"
+                "path": "session_grant.session_key",
+                "account": "SessionGrant"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "session_grant"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "expires_in_seconds",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "resolve_round",
+      "discriminator": [
+        165,
+        114,
+        237,
+        158,
+        1,
+        36,
+        70,
+        254
+      ],
+      "accounts": [
+        {
+          "name": "match_state"
+        },
+        {
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taker_inventory",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  118,
+                  101,
+                  110,
+                  116,
+                  111,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              },
+              {
+                "kind": "account",
+                "path": "runtime.taker",
+                "account": "MatchRuntime"
               }
             ]
           }
@@ -2856,24 +2535,41 @@
       "args": []
     },
     {
-      "name": "set_private_inventory_privacy",
+      "name": "scrub_private_inventory",
       "discriminator": [
-        125,
-        78,
-        223,
-        173,
-        218,
-        244,
-        245,
-        220
+        98,
+        148,
+        90,
+        45,
+        20,
+        7,
+        197,
+        192
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "inventory"
-          ]
+          "name": "runtime",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "runtime.match_key",
+                "account": "MatchRuntime"
+              }
+            ]
+          }
         },
         {
           "name": "inventory",
@@ -2986,36 +2682,72 @@
           "address": "Magic11111111111111111111111111111111111111"
         }
       ],
-      "args": [
-        {
-          "name": "is_private",
-          "type": "bool"
-        }
-      ]
+      "args": []
     },
     {
-      "name": "set_private_quote_privacy",
+      "name": "scrub_private_quote",
       "discriminator": [
-        212,
+        181,
         240,
-        34,
-        157,
-        135,
-        32,
-        106,
-        174
+        67,
+        177,
+        176,
+        77,
+        210,
+        128
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "quote"
-          ]
+          "name": "runtime",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "runtime.match_key",
+                "account": "MatchRuntime"
+              }
+            ]
+          }
         },
         {
           "name": "quote",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "quote.match_key",
+                "account": "PrivateQuote"
+              },
+              {
+                "kind": "account",
+                "path": "quote.authority",
+                "account": "PrivateQuote"
+              }
+            ]
+          }
         },
         {
           "name": "permission",
@@ -3096,12 +2828,7 @@
           "address": "Magic11111111111111111111111111111111111111"
         }
       ],
-      "args": [
-        {
-          "name": "is_private",
-          "type": "bool"
-        }
-      ]
+      "args": []
     },
     {
       "name": "settle_match",
@@ -3121,7 +2848,26 @@
         },
         {
           "name": "result",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
         },
         {
           "name": "escrow",
@@ -3148,8 +2894,7 @@
         },
         {
           "name": "winner",
-          "writable": true,
-          "signer": true
+          "writable": true
         }
       ],
       "args": []
@@ -3171,15 +2916,28 @@
           "name": "match_state"
         },
         {
-          "name": "round",
-          "writable": true
-        },
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "match_state"
-          ]
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -3202,11 +2960,42 @@
           "writable": true
         },
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "match_state"
-          ]
+          "name": "authority"
+        },
+        {
+          "name": "session_signer",
+          "signer": true
+        },
+        {
+          "name": "session_grant",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              },
+              {
+                "kind": "account",
+                "path": "session_signer"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -3233,51 +3022,57 @@
           "name": "match_state"
         },
         {
-          "name": "round",
-          "writable": true
-        },
-        {
-          "name": "quote",
-          "writable": true
-        },
-        {
-          "name": "dealer",
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "price_e6",
-          "type": "i64"
-        }
-      ]
-    },
-    {
-      "name": "submit_quote_session",
-      "discriminator": [
-        206,
-        99,
-        229,
-        209,
-        188,
-        183,
-        224,
-        109
-      ],
-      "accounts": [
-        {
-          "name": "match_state"
-        },
-        {
-          "name": "round",
-          "writable": true
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              }
+            ]
+          }
         },
         {
           "name": "authority"
         },
         {
           "name": "quote",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_state"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
         },
         {
           "name": "session_signer",
@@ -3321,109 +3116,6 @@
           "type": "i64"
         }
       ]
-    },
-    {
-      "name": "undelegate_match",
-      "discriminator": [
-        142,
-        117,
-        126,
-        27,
-        242,
-        11,
-        103,
-        14
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "match_state",
-          "writable": true
-        },
-        {
-          "name": "magic_fee_vault",
-          "writable": true
-        },
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "match_state"
-          ]
-        },
-        {
-          "name": "magic_program",
-          "address": "Magic11111111111111111111111111111111111111"
-        },
-        {
-          "name": "magic_context",
-          "writable": true,
-          "address": "MagicContext1111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "undelegate_oracle",
-      "discriminator": [
-        98,
-        33,
-        8,
-        170,
-        225,
-        184,
-        165,
-        166
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "oracle",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  114,
-                  97,
-                  99,
-                  108,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "oracle.feed_id",
-                "account": "OraclePrice"
-              }
-            ]
-          }
-        },
-        {
-          "name": "magic_fee_vault",
-          "writable": true
-        },
-        {
-          "name": "magic_program",
-          "address": "Magic11111111111111111111111111111111111111"
-        },
-        {
-          "name": "magic_context",
-          "writable": true,
-          "address": "MagicContext1111111111111111111111111111111"
-        }
-      ],
-      "args": []
     },
     {
       "name": "undelegate_private_inventory",
@@ -3511,7 +3203,31 @@
         },
         {
           "name": "quote",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "quote.match_key",
+                "account": "PrivateQuote"
+              },
+              {
+                "kind": "account",
+                "path": "quote.authority",
+                "account": "PrivateQuote"
+              }
+            ]
+          }
         },
         {
           "name": "magic_fee_vault",
@@ -3530,16 +3246,16 @@
       "args": []
     },
     {
-      "name": "undelegate_round",
+      "name": "undelegate_runtime",
       "discriminator": [
-        158,
-        187,
-        73,
-        237,
-        216,
-        44,
-        132,
-        162
+        117,
+        183,
+        58,
+        246,
+        102,
+        117,
+        199,
+        168
       ],
       "accounts": [
         {
@@ -3548,8 +3264,29 @@
           "signer": true
         },
         {
-          "name": "round",
-          "writable": true
+          "name": "runtime",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  110,
+                  116,
+                  105,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "runtime.match_key",
+                "account": "MatchRuntime"
+              }
+            ]
+          }
         },
         {
           "name": "magic_fee_vault",
@@ -3582,14 +3319,62 @@
       "accounts": [
         {
           "name": "oracle",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  239,
+                  13,
+                  139,
+                  111,
+                  218,
+                  44,
+                  235,
+                  164,
+                  29,
+                  161,
+                  93,
+                  64,
+                  149,
+                  209,
+                  218,
+                  57,
+                  42,
+                  13,
+                  47,
+                  142,
+                  208,
+                  198,
+                  199,
+                  188,
+                  15,
+                  76,
+                  250,
+                  200,
+                  194,
+                  128,
+                  181,
+                  109
+                ]
+              }
+            ]
+          }
         },
         {
-          "name": "price_update"
-        },
-        {
-          "name": "authority",
-          "signer": true
+          "name": "price_feed"
         }
       ],
       "args": []
@@ -3610,19 +3395,6 @@
       ]
     },
     {
-      "name": "Match",
-      "discriminator": [
-        236,
-        63,
-        169,
-        38,
-        15,
-        56,
-        196,
-        162
-      ]
-    },
-    {
       "name": "MatchResult",
       "discriminator": [
         234,
@@ -3633,6 +3405,32 @@
         92,
         223,
         196
+      ]
+    },
+    {
+      "name": "MatchRuntime",
+      "discriminator": [
+        33,
+        50,
+        28,
+        7,
+        38,
+        136,
+        51,
+        28
+      ]
+    },
+    {
+      "name": "MatchV2",
+      "discriminator": [
+        62,
+        55,
+        226,
+        63,
+        20,
+        119,
+        49,
+        118
       ]
     },
     {
@@ -3688,19 +3486,6 @@
       ]
     },
     {
-      "name": "RfqRound",
-      "discriminator": [
-        125,
-        131,
-        192,
-        21,
-        212,
-        8,
-        68,
-        237
-      ]
-    },
-    {
       "name": "SessionGrant",
       "discriminator": [
         34,
@@ -3727,6 +3512,58 @@
         146,
         0
       ]
+    },
+    {
+      "name": "MatchFinalized",
+      "discriminator": [
+        234,
+        71,
+        250,
+        217,
+        155,
+        97,
+        21,
+        217
+      ]
+    },
+    {
+      "name": "RfqOpened",
+      "discriminator": [
+        42,
+        102,
+        74,
+        67,
+        169,
+        110,
+        253,
+        148
+      ]
+    },
+    {
+      "name": "RoundResolved",
+      "discriminator": [
+        204,
+        146,
+        253,
+        187,
+        8,
+        61,
+        75,
+        29
+      ]
+    },
+    {
+      "name": "RuntimeFinalized",
+      "discriminator": [
+        230,
+        254,
+        153,
+        244,
+        96,
+        255,
+        103,
+        70
+      ]
     }
   ],
   "errors": [
@@ -3752,276 +3589,261 @@
     },
     {
       "code": 6004,
-      "name": "InvalidSeat",
-      "msg": "seat index is outside the four-seat range"
-    },
-    {
-      "code": 6005,
       "name": "DuplicatePlayer",
       "msg": "wallet is already a member of this match"
     },
     {
-      "code": 6006,
-      "name": "SeatOccupied",
-      "msg": "seat is already occupied"
-    },
-    {
-      "code": 6007,
+      "code": 6005,
       "name": "NotEnoughPlayers",
       "msg": "at least two players are required to trade"
     },
     {
-      "code": 6008,
+      "code": 6006,
       "name": "MatchAlreadyStarted",
       "msg": "match has already started"
     },
     {
-      "code": 6009,
+      "code": 6007,
       "name": "MatchNotStarted",
       "msg": "match must be started first"
     },
     {
-      "code": 6010,
-      "name": "ResultAlreadyCreated",
-      "msg": "match result already exists"
-    },
-    {
-      "code": 6011,
+      "code": 6008,
       "name": "NotAMatchPlayer",
       "msg": "wallet is not a member of this match"
     },
     {
-      "code": 6012,
+      "code": 6009,
       "name": "PrivateAuthorityMismatch",
       "msg": "private account authority does not match the requested owner"
     },
     {
-      "code": 6013,
+      "code": 6010,
       "name": "InvalidSide",
       "msg": "side must be BUY or SELL"
     },
     {
-      "code": 6014,
+      "code": 6011,
       "name": "InvalidQuantity",
       "msg": "quantity is not one of the allowed lot sizes"
     },
     {
-      "code": 6015,
+      "code": 6012,
       "name": "OracleStale",
       "msg": "oracle price is stale or invalid"
     },
     {
-      "code": 6016,
+      "code": 6013,
       "name": "OracleInvalid",
       "msg": "oracle snapshot is invalid"
     },
     {
-      "code": 6017,
+      "code": 6014,
       "name": "QuoteOutsideBand",
       "msg": "quote is outside the configured oracle deviation band"
     },
     {
-      "code": 6018,
+      "code": 6015,
       "name": "InvalidQuoteWindow",
       "msg": "quote window must be between one and thirty seconds"
     },
     {
-      "code": 6019,
+      "code": 6016,
       "name": "NotCurrentTaker",
       "msg": "caller is not the current round taker"
     },
     {
-      "code": 6020,
+      "code": 6017,
       "name": "RoundNotOpen",
-      "msg": "round has already been opened or resolved"
+      "msg": "round is not ready to open"
     },
     {
-      "code": 6021,
+      "code": 6018,
       "name": "QuoteDeadlinePassed",
       "msg": "quote deadline has passed"
     },
     {
-      "code": 6022,
-      "name": "OracleMismatch",
-      "msg": "oracle account does not match the round"
-    },
-    {
-      "code": 6023,
+      "code": 6019,
       "name": "InvalidQuoteAccount",
-      "msg": "quote account does not match the match, round, or dealer"
+      "msg": "quote account does not match the match or dealer"
     },
     {
-      "code": 6024,
+      "code": 6020,
       "name": "DealerIsTaker",
       "msg": "dealer cannot quote its own RFQ"
     },
     {
-      "code": 6025,
+      "code": 6021,
       "name": "QuoteLocked",
       "msg": "quote is already locked"
     },
     {
-      "code": 6026,
+      "code": 6022,
       "name": "QuoteNotAuthorized",
       "msg": "quote signer does not own the quote account"
     },
     {
-      "code": 6027,
-      "name": "QuoteNotLocked",
-      "msg": "quote is not locked"
-    },
-    {
-      "code": 6028,
+      "code": 6023,
       "name": "QuoteCountMismatch",
       "msg": "quote count does not match the supplied quote accounts"
     },
     {
-      "code": 6029,
+      "code": 6024,
       "name": "EmptyRoundRequired",
       "msg": "round has sealed quotes and cannot be skipped"
     },
     {
-      "code": 6030,
+      "code": 6025,
       "name": "NotEnoughQuotes",
       "msg": "not enough valid dealer quotes"
     },
     {
-      "code": 6031,
+      "code": 6026,
       "name": "DeadlineNotReached",
       "msg": "round deadline has not been reached"
     },
     {
-      "code": 6032,
+      "code": 6027,
       "name": "RoundNotResolved",
       "msg": "round has not been resolved"
     },
     {
-      "code": 6033,
+      "code": 6028,
       "name": "MatchNotFinished",
       "msg": "match has not completed all rounds"
     },
     {
-      "code": 6034,
+      "code": 6029,
       "name": "MatchFinished",
       "msg": "match has already completed all rounds"
     },
     {
-      "code": 6035,
+      "code": 6030,
       "name": "ScoresAlreadyFinalized",
       "msg": "score has already been finalized"
     },
     {
-      "code": 6036,
+      "code": 6031,
       "name": "AlreadySettled",
       "msg": "match result has already been settled"
     },
     {
-      "code": 6037,
+      "code": 6032,
       "name": "ResultNotFinalized",
       "msg": "match result is not finalized"
     },
     {
-      "code": 6038,
+      "code": 6033,
       "name": "SettlementMismatch",
       "msg": "settlement account relationship is invalid"
     },
     {
-      "code": 6039,
+      "code": 6034,
       "name": "WrongWinner",
       "msg": "settlement winner does not match the finalized result"
     },
     {
-      "code": 6040,
+      "code": 6035,
       "name": "InvalidEscrowAmount",
       "msg": "escrow amount must be positive"
     },
     {
-      "code": 6041,
-      "name": "EscrowMismatch",
-      "msg": "escrow account does not belong to the match"
-    },
-    {
-      "code": 6042,
+      "code": 6036,
       "name": "EscrowInsufficientFunds",
       "msg": "escrow does not contain the configured payout"
     },
     {
-      "code": 6043,
+      "code": 6037,
+      "name": "EscrowMismatch",
+      "msg": "escrow account does not belong to the match"
+    },
+    {
+      "code": 6038,
       "name": "InventoryMismatch",
       "msg": "inventory account does not match the expected player and match"
     },
     {
-      "code": 6044,
+      "code": 6039,
       "name": "ArithmeticOverflow",
       "msg": "arithmetic overflow"
     },
     {
-      "code": 6045,
+      "code": 6040,
       "name": "InvalidSession",
       "msg": "session grant is invalid"
     },
     {
-      "code": 6046,
+      "code": 6041,
       "name": "SessionExpired",
       "msg": "session grant has expired"
     },
     {
-      "code": 6047,
+      "code": 6042,
       "name": "SessionActionNotAllowed",
       "msg": "session grant does not permit this action"
     },
     {
-      "code": 6048,
+      "code": 6043,
       "name": "InvalidSessionDuration",
       "msg": "session duration is outside the allowed match window"
     },
     {
-      "code": 6049,
+      "code": 6044,
       "name": "InvalidSessionActionMask",
       "msg": "session action mask contains an unauthorized action"
     },
     {
-      "code": 6050,
+      "code": 6045,
       "name": "NotMatchHost",
-      "msg": "only the first joined player can start the match"
+      "msg": "only the match authority can start the match"
     },
     {
-      "code": 6051,
-      "name": "InvalidMatchAccount",
-      "msg": "match account is invalid or uses an unsupported layout"
-    },
-    {
-      "code": 6052,
-      "name": "ActiveMatchMismatch",
-      "msg": "the supplied match is not the pit's active match"
-    },
-    {
-      "code": 6053,
-      "name": "MatchNotReleasable",
-      "msg": "the active match has progressed and cannot be released"
-    },
-    {
-      "code": 6054,
-      "name": "MatchDelegationDisabled",
-      "msg": "match delegation is disabled; matches must remain on the base layer"
-    },
-    {
-      "code": 6055,
-      "name": "OracleDelegationDisabled",
-      "msg": "oracle delegation is disabled; the oracle must remain on the base layer"
-    },
-    {
-      "code": 6056,
-      "name": "RfqStateCommitDisabled",
-      "msg": "RFQ state commits are disabled; only round and private accounts are delegated"
-    },
-    {
-      "code": 6057,
+      "code": 6046,
       "name": "InvalidRoundCount",
       "msg": "round count must be between one and eight"
     },
     {
-      "code": 6058,
+      "code": 6047,
+      "name": "ActiveMatchMismatch",
+      "msg": "the supplied match is not the pit's active match"
+    },
+    {
+      "code": 6048,
+      "name": "MatchNotReleasable",
+      "msg": "the active match has progressed and cannot be released"
+    },
+    {
+      "code": 6049,
+      "name": "InvalidMatchAccount",
+      "msg": "the supplied match account has an unsupported layout"
+    },
+    {
+      "code": 6050,
+      "name": "LegacyMigrationNotSafe",
+      "msg": "the legacy match cannot be migrated without losing active round state"
+    },
+    {
+      "code": 6051,
+      "name": "InvalidRuntime",
+      "msg": "runtime account is invalid"
+    },
+    {
+      "code": 6052,
+      "name": "RuntimeNotTerminal",
+      "msg": "runtime is not terminal"
+    },
+    {
+      "code": 6053,
+      "name": "RuntimeNotFinalized",
+      "msg": "runtime has not finalized its public result"
+    },
+    {
+      "code": 6054,
+      "name": "PrivateStateNotScrubbed",
+      "msg": "private state has not been scrubbed"
+    },
+    {
+      "code": 6055,
       "name": "InvalidPrivatePermission",
       "msg": "private permission account is malformed or does not match its private account"
     }
@@ -4039,10 +3861,6 @@
           {
             "name": "round",
             "type": "u8"
-          },
-          {
-            "name": "host",
-            "type": "pubkey"
           },
           {
             "name": "deadline",
@@ -4072,75 +3890,21 @@
       }
     },
     {
-      "name": "Match",
+      "name": "MatchFinalized",
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "authority",
+            "name": "match_key",
             "type": "pubkey"
           },
           {
-            "name": "pit",
+            "name": "winner",
             "type": "pubkey"
           },
           {
-            "name": "match_nonce",
-            "type": "u64"
-          },
-          {
-            "name": "status",
-            "type": "u8"
-          },
-          {
-            "name": "capacity",
-            "type": "u8"
-          },
-          {
-            "name": "player_count",
-            "type": "u8"
-          },
-          {
-            "name": "current_round",
-            "type": "u8"
-          },
-          {
-            "name": "players",
-            "type": {
-              "array": [
-                "pubkey",
-                4
-              ]
-            }
-          },
-          {
-            "name": "seats",
-            "type": {
-              "array": [
-                "pubkey",
-                4
-              ]
-            }
-          },
-          {
-            "name": "result",
-            "type": "pubkey"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          },
-          {
-            "name": "round_count",
-            "type": "u8"
-          },
-          {
-            "name": "last_resolved_round",
-            "type": "u8"
-          },
-          {
-            "name": "last_round_winner",
-            "type": "pubkey"
+            "name": "completed_at",
+            "type": "i64"
           }
         ]
       }
@@ -4174,6 +3938,140 @@
           {
             "name": "settled",
             "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MatchRuntime",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "u8"
+          },
+          {
+            "name": "taker",
+            "type": "pubkey"
+          },
+          {
+            "name": "side",
+            "type": "u8"
+          },
+          {
+            "name": "quantity_lots",
+            "type": "u64"
+          },
+          {
+            "name": "opened_at",
+            "type": "i64"
+          },
+          {
+            "name": "deadline",
+            "type": "i64"
+          },
+          {
+            "name": "quote_count",
+            "type": "u8"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_price_e6",
+            "type": "i64"
+          },
+          {
+            "name": "winning_dealer",
+            "type": "pubkey"
+          },
+          {
+            "name": "clearing_price",
+            "type": "i64"
+          },
+          {
+            "name": "last_resolved_round",
+            "type": "u8"
+          },
+          {
+            "name": "last_round_winner",
+            "type": "pubkey"
+          },
+          {
+            "name": "finalized_at",
+            "type": "i64"
+          },
+          {
+            "name": "winner",
+            "type": "pubkey"
+          },
+          {
+            "name": "final_scores_e6",
+            "type": {
+              "array": [
+                "i64",
+                4
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MatchV2",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "pit",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "capacity",
+            "type": "u8"
+          },
+          {
+            "name": "player_count",
+            "type": "u8"
+          },
+          {
+            "name": "round_count",
+            "type": "u8"
+          },
+          {
+            "name": "players",
+            "type": {
+              "array": [
+                "pubkey",
+                4
+              ]
+            }
           },
           {
             "name": "bump",
@@ -4321,7 +4219,7 @@
       }
     },
     {
-      "name": "RfqRound",
+      "name": "RfqOpened",
       "type": {
         "kind": "struct",
         "fields": [
@@ -4346,28 +4244,40 @@
             "type": "u64"
           },
           {
-            "name": "opened_at",
-            "type": "i64"
-          },
-          {
             "name": "deadline",
             "type": "i64"
           },
           {
-            "name": "quote_count",
-            "type": "u8"
-          },
+            "name": "oracle_price_e6",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoundResolved",
+      "type": {
+        "kind": "struct",
+        "fields": [
           {
-            "name": "status",
-            "type": "u8"
-          },
-          {
-            "name": "oracle",
+            "name": "match_key",
             "type": "pubkey"
           },
           {
-            "name": "oracle_price_e6",
-            "type": "i64"
+            "name": "round",
+            "type": "u8"
+          },
+          {
+            "name": "taker",
+            "type": "pubkey"
+          },
+          {
+            "name": "side",
+            "type": "u8"
+          },
+          {
+            "name": "quantity_lots",
+            "type": "u64"
           },
           {
             "name": "winning_dealer",
@@ -4376,10 +4286,31 @@
           {
             "name": "clearing_price",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RuntimeFinalized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_key",
+            "type": "pubkey"
           },
           {
-            "name": "bump",
-            "type": "u8"
+            "name": "winner",
+            "type": "pubkey"
+          },
+          {
+            "name": "final_scores_e6",
+            "type": {
+              "array": [
+                "i64",
+                4
+              ]
+            }
           }
         ]
       }

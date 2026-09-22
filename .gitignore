@@ -6,6 +6,7 @@ target
 dist
 .next
 .env
+.secrets/
 artifacts
 *.md
 !docs/AUTHORITY.md

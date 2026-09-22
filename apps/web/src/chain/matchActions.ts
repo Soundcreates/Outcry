@@ -1,122 +1,179 @@
-import {
-  DELEGATION_PROGRAM_ID,
-  MAGIC_CONTEXT_ID,
-  MAGIC_PROGRAM_ID,
-  delegateBufferPdaFromDelegatedAccountAndOwnerProgram,
-  delegationMetadataPdaFromDelegatedAccount,
-  delegationRecordPdaFromDelegatedAccount,
-  magicFeeVaultPdaFromValidator,
-} from "@magicblock-labs/ephemeral-rollups-sdk";
-import {
-  Connection,
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  Transaction,
-  TransactionInstruction,
-} from "@solana/web3.js";
+import nacl from "tweetnacl";
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import outcryIdl from "./idl/outcry.json";
 import { createBaseRpcConnection } from "./baseRpc";
-import { createPrivateConnection, ensureTeeFeePayer, getPreparedPrivateQuote, preparePrivateQuote, privateInventoryPda, privateQuotePda, teeValidatorForRpc } from "./privacy";
-import { postPythPriceAndConsume, PythSubmissionError } from "./pyth";
-import { CURRENT_MATCH_BYTES, decodePublicMatchAccount, ORACLE_FEED_ID, ORACLE_FEED_ID_HEX, escrowPda, oraclePda, resultPda, roundPda } from "./matchState";
+import { createPrivateConnection, privateInventoryPda, privateQuotePda, teeFeePayerForRpc } from "./privacy";
+import { escrowPda, oraclePda, PYTH_SOL_USD_PUSH_FEED, resultPda, runtimePda } from "./matchState";
+import type { PublicMatchSnapshot } from "./matchState";
 import type { TradeIntent } from "../match/tradeIntent";
 
-const OPEN_RFQ_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "open_rfq")?.discriminator ?? []);
-const INITIALIZE_ORACLE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_oracle")?.discriminator ?? []);
-const INITIALIZE_ORACLE_UNPRICED_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_oracle_unpriced")?.discriminator ?? []);
-const INITIALIZE_MATCH_RESULT_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_match_result")?.discriminator ?? []);
-const INITIALIZE_ESCROW_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "initialize_escrow")?.discriminator ?? []);
-const PREPARE_RFQ_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "prepare_rfq_round")?.discriminator ?? []);
-const DELEGATE_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "delegate_round")?.discriminator ?? []);
-const UPDATE_ORACLE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "update_oracle")?.discriminator ?? []);
-const START_MATCH_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "start_match")?.discriminator ?? []);
-const MIGRATE_LEGACY_MATCH_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "migrate_legacy_match")?.discriminator ?? []);
-const SETTLE_MATCH_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "settle_match")?.discriminator ?? []);
-const FINALIZE_SCORES_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "finalize_scores")?.discriminator ?? []);
-const SUBMIT_QUOTE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "submit_quote")?.discriminator ?? []);
-const AUTHORIZE_SESSION_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "authorize_session")?.discriminator ?? []);
-const SUBMIT_QUOTE_SESSION_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "submit_quote_session")?.discriminator ?? []);
-const RESOLVE_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "resolve_round")?.discriminator ?? []);
-const SKIP_EMPTY_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "skip_empty_round")?.discriminator ?? []);
-const UNDELEGATE_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "undelegate_round")?.discriminator ?? []);
-const UNDELEGATE_PRIVATE_QUOTE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "undelegate_private_quote")?.discriminator ?? []);
-const UNDELEGATE_PRIVATE_INVENTORY_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "undelegate_private_inventory")?.discriminator ?? []);
-const UNDELEGATE_ORACLE_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "undelegate_oracle")?.discriminator ?? []);
-const NEXT_ROUND_DISCRIMINATOR = Uint8Array.from(outcryIdl.instructions.find((instruction) => instruction.name === "next_round")?.discriminator ?? []);
 const PROGRAM_ID = new PublicKey(outcryIdl.address);
+const SYSTEM_PROGRAM_ID = SystemProgram.programId;
+const SESSION_GRANT_DISCRIMINATOR = Uint8Array.from(outcryIdl.accounts.find((account) => account.name === "SessionGrant")?.discriminator ?? []);
+const SESSION_GRANT_BYTES = 115;
 export const DEFAULT_QUOTE_WINDOW_SECONDS = 30;
 export const DEFAULT_MATCH_PAYOUT_LAMPORTS = 1_000_000;
-const QUOTE_SESSION_ACTION = 2;
-const QUOTE_SESSION_DURATION_SECONDS = 15 * 60;
-const QUOTE_SESSION_SAFETY_MS = 5_000;
+export const DEFAULT_SESSION_DURATION_SECONDS = 24 * 60 * 60;
+export const SESSION_ACTION_OPEN_RFQ = 1;
+export const SESSION_ACTION_SUBMIT_QUOTE = 2;
+export const SESSION_ACTION_START_MATCH = 4;
+export const SESSION_ACTION_SETUP_PRIVATE_STATE = 8;
+export const DEFAULT_SESSION_ACTION_MASK = SESSION_ACTION_OPEN_RFQ | SESSION_ACTION_SUBMIT_QUOTE | SESSION_ACTION_START_MATCH | SESSION_ACTION_SETUP_PRIVATE_STATE;
 
-type PreparedQuoteSession = {
-  signer: Keypair;
-  expiresAt: number;
+const instructionDiscriminator = (name: string) => {
+  const instruction = outcryIdl.instructions.find((value) => value.name === name);
+  if (!instruction) throw new Error(`outcry_idl_missing_${name}`);
+  return Uint8Array.from(instruction.discriminator);
 };
 
-// Deliberately memory-only: reloading the page requires a fresh, scoped grant.
-const preparedQuoteSessions = new Map<string, PreparedQuoteSession>();
+const OPEN_RFQ_DISCRIMINATOR = instructionDiscriminator("open_rfq");
+const SUBMIT_QUOTE_DISCRIMINATOR = instructionDiscriminator("submit_quote");
+const START_MATCH_DISCRIMINATOR = instructionDiscriminator("start_match");
+const AUTHORIZE_SESSION_DISCRIMINATOR = instructionDiscriminator("authorize_session");
+const RENEW_SESSION_DISCRIMINATOR = instructionDiscriminator("renew_session");
+const INITIALIZE_ORACLE_DISCRIMINATOR = instructionDiscriminator("initialize_oracle");
+const INITIALIZE_ORACLE_UNPRICED_DISCRIMINATOR = instructionDiscriminator("initialize_oracle_unpriced");
+const UPDATE_ORACLE_DISCRIMINATOR = instructionDiscriminator("update_oracle");
+const INITIALIZE_MATCH_RESULT_DISCRIMINATOR = instructionDiscriminator("initialize_match_result");
+const INITIALIZE_ESCROW_DISCRIMINATOR = instructionDiscriminator("initialize_escrow");
+const RESOLVE_ROUND_DISCRIMINATOR = instructionDiscriminator("resolve_round");
+const SKIP_EMPTY_ROUND_DISCRIMINATOR = instructionDiscriminator("skip_empty_round");
+const ADVANCE_ROUND_DISCRIMINATOR = instructionDiscriminator("advance_round");
+const FINALIZE_RUNTIME_DISCRIMINATOR = instructionDiscriminator("finalize_runtime");
+const FINALIZE_MATCH_DISCRIMINATOR = instructionDiscriminator("finalize_match");
+const SETTLE_MATCH_DISCRIMINATOR = instructionDiscriminator("settle_match");
 
-type AccountInfoConnection = Pick<Connection, "getMultipleAccountsInfo">;
+function worldApiBaseUrl() {
+  return (
+    import.meta.env?.VITE_API_BASE_URL
+    || import.meta.env?.VITE_WORLD_HTTP
+    || (import.meta.env?.VITE_WORLD_WS || "ws://localhost:2567").replace(/^ws/, "http")
+  ).replace(/\/+$/, "");
+}
 
 export type RfqProgress = (status: string) => void;
 
 export class RfqSubmissionError extends Error {
-  constructor(
-    public readonly stage: "wallet" | "state" | "price" | "simulation" | "confirmation" | "tee",
-    public readonly code: string,
-    detail?: string,
-    public readonly diagnostics?: PythSubmissionError["diagnostics"],
-  ) {
+  constructor(public readonly stage: "session" | "state" | "relay" | "confirmation", public readonly code: string, public readonly detail?: string) {
     super(detail ? `${code}: ${detail}` : code);
     this.name = "RfqSubmissionError";
   }
 }
 
-function rfqFailure(stage: RfqSubmissionError["stage"], code: string, reason?: unknown) {
+export function normalizeRfqError(reason: unknown) {
   if (reason instanceof RfqSubmissionError) return reason;
-  const detail = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "";
-  console.error(`[outcry][rfq][${stage}]`, reason);
-  return new RfqSubmissionError(
-    stage,
-    code,
-    detail,
-    reason instanceof PythSubmissionError ? reason.diagnostics : undefined,
-  );
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  const customError = detail.match(/custom program error:\s*(0x[\da-f]+)/i);
+  const errorNumber = customError ? Number.parseInt(customError[1]!, 16) : undefined;
+  if (errorNumber === 6041) return new RfqSubmissionError("session", "session_expired");
+  if (errorNumber === 6040) return new RfqSubmissionError("session", "session_invalid");
+  if (errorNumber === 6042) return new RfqSubmissionError("session", "session_action_not_allowed");
+  return new RfqSubmissionError("state", "rfq_submit_failed", detail);
 }
 
-function integerBytes(value: number | bigint, signed = false) {
-  const data = new Uint8Array(8);
-  new DataView(data.buffer)[signed ? "setBigInt64" : "setBigUint64"](0, BigInt(value), true);
-  return data;
+function seed(value: string) {
+  return new TextEncoder().encode(value);
 }
 
-function startMatchSimulationError(value: { err: unknown; logs?: string[] | null; unitsConsumed?: number | null }, instructionLabels: string[]) {
-  const instructionError = typeof value.err === "object" && value.err !== null && "InstructionError" in value.err
-    ? (value.err as { InstructionError?: unknown }).InstructionError
-    : undefined;
-  const failedInstructionIndex = Array.isArray(instructionError) && typeof instructionError[0] === "number"
-    ? instructionError[0]
-    : undefined;
-  const failedInstruction = failedInstructionIndex === undefined
-    ? "unknown_instruction"
-    : instructionLabels[failedInstructionIndex] ?? `instruction_${failedInstructionIndex}`;
-  const logs = value.logs ?? [];
-  const relevantLog = [...logs].reverse().find((log) => /AnchorError|Error Code|failed|custom program error|constraint/i.test(log));
-  console.error("[outcry][match-start][simulation]", {
-    failedInstructionIndex,
-    failedInstruction,
-    err: value.err,
-    logs,
-    unitsConsumed: value.unitsConsumed ?? null,
+function sameBytes(left: Uint8Array, right: Uint8Array) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+async function validateOpenRfqSession(input: { baseRpcUrl: string; matchAddress: string; authorityAddress: string; session: Keypair; programId: PublicKey }) {
+  const grant = sessionGrantPda({
+    matchAddress: input.matchAddress,
+    authorityAddress: input.authorityAddress,
+    sessionKey: input.session.publicKey,
+    programId: input.programId,
   });
-  return `match_start_bundle_simulation_failed:${failedInstruction}:${relevantLog ?? JSON.stringify(value.err)}`;
+  const account = await createBaseRpcConnection(input.baseRpcUrl).getAccountInfo(grant, "confirmed");
+  if (!account || !account.owner.equals(input.programId) || account.data.length !== SESSION_GRANT_BYTES || !sameBytes(account.data.slice(0, 8), SESSION_GRANT_DISCRIMINATOR)) {
+    throw new RfqSubmissionError("session", "session_invalid");
+  }
+  const match = new PublicKey(input.matchAddress);
+  const authority = new PublicKey(input.authorityAddress);
+  const expiresAt = Number(new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength).getBigInt64(104, true));
+  const actionMask = account.data[112]!;
+  const revoked = account.data[113] !== 0;
+  if (!sameBytes(account.data.slice(8, 40), match.toBytes())
+    || !sameBytes(account.data.slice(40, 72), authority.toBytes())
+    || !sameBytes(account.data.slice(72, 104), input.session.publicKey.toBytes())
+    || revoked) throw new RfqSubmissionError("session", "session_invalid");
+  if (Math.floor(Date.now() / 1_000) >= expiresAt) throw new RfqSubmissionError("session", "session_expired");
+  if ((actionMask & SESSION_ACTION_OPEN_RFQ) === 0) throw new RfqSubmissionError("session", "session_action_not_allowed");
 }
 
-function quoteSessionKey(input: { baseRpcUrl: string; matchAddress: string; dealer: PublicKey; programId: PublicKey }) {
-  return [input.baseRpcUrl, input.programId.toBase58(), input.matchAddress, input.dealer.toBase58()].join(":");
+function u8(value: number) {
+  if (!Number.isInteger(value) || value < 0 || value > 255) throw new Error("invalid_u8");
+  return Uint8Array.of(value);
+}
+
+function u64(value: bigint | number) {
+  const result = BigInt(value);
+  if (result < 0n || result > 18_446_744_073_709_551_615n) throw new Error("invalid_u64");
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, result, true);
+  return bytes;
+}
+
+function i64(value: bigint | number) {
+  const result = BigInt(value);
+  if (result < -9_223_372_036_854_775_808n || result > 9_223_372_036_854_775_807n) throw new Error("invalid_i64");
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigInt64(0, result, true);
+  return bytes;
+}
+
+function bytes32(value: Uint8Array) {
+  if (value.length !== 32) throw new Error("invalid_bytes32");
+  return value;
+}
+
+function sideValue(side: "BUY" | "SELL" | number) {
+  if (side === "BUY" || side === 0) return 0;
+  if (side === "SELL" || side === 1) return 1;
+  throw new Error("invalid_side");
+}
+
+const sessionFallback = new Map<string, Keypair>();
+
+export function sessionKeypairForMatch(matchAddress: string) {
+  const key = `outcry:session:${matchAddress}`;
+  const existing = sessionFallback.get(key);
+  if (existing) return existing;
+  try {
+    const encoded = globalThis.sessionStorage?.getItem(key);
+    if (encoded) {
+      const secretKey = Uint8Array.from(encoded.split(",").map((value) => Number(value)));
+      if (secretKey.length === 64) {
+        const session = Keypair.fromSecretKey(secretKey);
+        sessionFallback.set(key, session);
+        return session;
+      }
+    }
+  } catch {
+    // Fall through to a fresh in-memory session for non-browser callers.
+  }
+  const session = Keypair.generate();
+  sessionFallback.set(key, session);
+  try {
+    globalThis.sessionStorage?.setItem(key, Array.from(session.secretKey).join(","));
+  } catch {
+    // A caller can still pass this keypair explicitly to setup helpers.
+  }
+  return session;
+}
+
+export function replaceSessionKeypairForMatch(matchAddress: string) {
+  const key = `outcry:session:${matchAddress}`;
+  const session = Keypair.generate();
+  sessionFallback.set(key, session);
+  try {
+    globalThis.sessionStorage?.setItem(key, Array.from(session.secretKey).join(","));
+  } catch {
+    // The in-memory key remains usable for the current page.
+  }
+  return session;
 }
 
 export function sessionGrantPda(input: {
@@ -125,1353 +182,398 @@ export function sessionGrantPda(input: {
   sessionKey: PublicKey;
   programId?: PublicKey;
 }) {
-  const programId = input.programId ?? PROGRAM_ID;
   return PublicKey.findProgramAddressSync([
-    Buffer.from("session"),
-    new PublicKey(input.matchAddress).toBuffer(),
-    new PublicKey(input.authorityAddress).toBuffer(),
-    input.sessionKey.toBuffer(),
-  ], programId)[0];
+    seed("session"),
+    new PublicKey(input.matchAddress).toBytes(),
+    new PublicKey(input.authorityAddress).toBytes(),
+    input.sessionKey.toBytes(),
+  ], input.programId ?? PROGRAM_ID)[0];
 }
 
-function getPreparedQuoteSession(input: { baseRpcUrl: string; matchAddress: string; dealer: PublicKey; programId: PublicKey }) {
-  const key = quoteSessionKey(input);
-  const session = preparedQuoteSessions.get(key);
-  if (!session || session.expiresAt - Date.now() <= QUOTE_SESSION_SAFETY_MS) {
-    preparedQuoteSessions.delete(key);
-    throw new Error("private_quote_session_not_prepared");
-  }
-  return session;
+function sessionGrantAddress(input: { matchAddress: string; authorityAddress: string; sessionKey: PublicKey; sessionGrantAddress?: string; programId: PublicKey }) {
+  return input.sessionGrantAddress
+    ? new PublicKey(input.sessionGrantAddress)
+    : sessionGrantPda({ matchAddress: input.matchAddress, authorityAddress: input.authorityAddress, sessionKey: input.sessionKey, programId: input.programId });
 }
 
-async function prepareQuoteSession(input: {
-  baseConnection: Connection;
-  wallet: {
-    signTransaction?: (transaction: Transaction) => Promise<Transaction>;
-    signAndSendTransaction?: (transaction: Transaction) => Promise<string | { signature: string }>;
-  };
-  baseRpcUrl: string;
+function instruction(programId: PublicKey, data: Uint8Array, keys: Array<{ pubkey: PublicKey; isWritable: boolean; isSigner: boolean }>) {
+  return new TransactionInstruction({ programId, keys, data: Buffer.from(data) });
+}
+
+export function createAuthorizeSessionInstruction(input: {
   matchAddress: string;
-  dealer: PublicKey;
-  programId: PublicKey;
+  authorityAddress: string;
+  sessionKey: PublicKey;
+  expiresInSeconds: bigint | number;
+  actionMask?: number;
+  programId?: string | PublicKey;
 }) {
-  const key = quoteSessionKey(input);
-  const existing = preparedQuoteSessions.get(key);
-  if (existing && existing.expiresAt - Date.now() > QUOTE_SESSION_SAFETY_MS) return existing;
-
-  const signer = Keypair.generate();
-  await sendWalletTransaction({
-    connection: input.baseConnection,
-    wallet: input.wallet,
-    payer: input.dealer,
-    label: "private_quote_session_authorization",
-    instructions: [createAuthorizeQuoteSessionInstruction({
-      matchAddress: input.matchAddress,
-      authorityAddress: input.dealer.toBase58(),
-      sessionKey: signer.publicKey,
-      programId: input.programId,
-    })],
-  });
-  const session = {
-    signer,
-    expiresAt: Date.now() + QUOTE_SESSION_DURATION_SECONDS * 1_000 - QUOTE_SESSION_SAFETY_MS,
-  };
-  preparedQuoteSessions.set(key, session);
-  return session;
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  const match = new PublicKey(input.matchAddress);
+  const authority = new PublicKey(input.authorityAddress);
+  const grant = sessionGrantPda({ matchAddress: input.matchAddress, authorityAddress: input.authorityAddress, sessionKey: input.sessionKey, programId });
+  return instruction(programId, new Uint8Array([
+    ...AUTHORIZE_SESSION_DISCRIMINATOR,
+    ...input.sessionKey.toBytes(),
+    ...i64(input.expiresInSeconds),
+    ...u8(input.actionMask ?? DEFAULT_SESSION_ACTION_MASK),
+  ]), [
+    { pubkey: match, isWritable: false, isSigner: false },
+    { pubkey: grant, isWritable: true, isSigner: false },
+    { pubkey: authority, isWritable: true, isSigner: true },
+    { pubkey: SYSTEM_PROGRAM_ID, isWritable: false, isSigner: false },
+  ]);
 }
 
-async function sendTeeTransaction(input: {
-  connection: Connection;
-  wallet?: { signTransaction?: (transaction: Transaction) => Promise<Transaction> };
-  feePayer: Keypair;
-  additionalSigners?: Keypair[];
-  instructions: TransactionInstruction[];
-  label: string;
+export function createRenewSessionInstruction(input: {
+  matchAddress: string;
+  authorityAddress: string;
+  sessionKey: PublicKey;
+  expiresInSeconds?: bigint | number;
+  programId?: string | PublicKey;
 }) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const transaction = new Transaction().add(...input.instructions);
-    transaction.feePayer = input.feePayer.publicKey;
-    const blockhash = await input.connection.getLatestBlockhash("confirmed");
-    transaction.recentBlockhash = blockhash.blockhash;
-    transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
-    transaction.partialSign(input.feePayer, ...(input.additionalSigners ?? []));
-
-    const simulation = await input.connection.simulateTransaction(transaction);
-    if (simulation.value.err) {
-      const diagnostics = {
-        label: input.label,
-        err: simulation.value.err,
-        logs: simulation.value.logs ?? [],
-        unitsConsumed: simulation.value.unitsConsumed ?? null,
-      };
-      console.error("[outcry][tee][simulation]", diagnostics);
-      const relevantLog = diagnostics.logs.find((log) => /AnchorError|Error Code|failed|custom program error/i.test(log));
-      throw new Error(`${input.label}_simulation_failed: ${relevantLog ?? JSON.stringify(diagnostics.err)}`);
-    }
-
-    try {
-      const signed = input.wallet?.signTransaction
-        ? await input.wallet.signTransaction(transaction)
-        : transaction;
-      const signature = await input.connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 5 });
-      const status = await waitForTeeSignature(input.connection, signature);
-      if (status.err) {
-        const transactionDetails = await input.connection.getTransaction(signature, {
-          commitment: "confirmed",
-          maxSupportedTransactionVersion: 0,
-        }).catch(() => null);
-        const diagnostics = {
-          label: input.label,
-          signature,
-          err: status.err,
-          logs: transactionDetails?.meta?.logMessages ?? [],
-          unitsConsumed: transactionDetails?.meta?.computeUnitsConsumed ?? null,
-        };
-        console.error("[outcry][tee][confirmation]", diagnostics);
-        const relevantLog = diagnostics.logs.find((log) => /AnchorError|Error Code|failed|custom program error/i.test(log));
-        throw new Error(`${input.label}_transaction_failed: ${relevantLog ?? JSON.stringify(status.err)}`);
-      }
-      return signature;
-    } catch (reason) {
-      if (!(reason instanceof Error) || !/expired|block height exceeded|blockhash not found/i.test(reason.message)) throw reason;
-      if (attempt === 2) throw new Error(`${input.label}_expired_retry_exhausted`);
-    }
-  }
-
-  throw new Error(`${input.label}_expired_retry_exhausted`);
-}
-
-async function waitForTeeSignature(connection: Connection, signature: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const status = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
-    if (status?.err || status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
-      return status ?? { err: null };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error("tee_signature_expired");
-}
-
-async function sendWalletTransaction(input: {
-  connection: Connection;
-  wallet: {
-    signTransaction?: (transaction: Transaction) => Promise<Transaction>;
-    signAndSendTransaction?: (transaction: Transaction) => Promise<string | { signature: string }>;
-  };
-  payer: PublicKey;
-  instructions: TransactionInstruction[];
-  label: string;
-}) {
-  if (!input.wallet.signTransaction && !input.wallet.signAndSendTransaction) throw new Error("wallet_transaction_signing_unavailable");
-  const transaction = new Transaction().add(...input.instructions);
-  transaction.feePayer = input.payer;
-  const blockhash = await input.connection.getLatestBlockhash("confirmed");
-  transaction.recentBlockhash = blockhash.blockhash;
-  transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
-  const simulation = await input.connection.simulateTransaction(transaction);
-  if (simulation.value.err) {
-    const relevantLog = simulation.value.logs?.find((log) => /AnchorError|Error Code|failed|custom program error/i.test(log));
-    throw new Error(`${input.label}_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
-  }
-  let signature: string;
-  if (input.wallet.signTransaction) {
-    const signed = await input.wallet.signTransaction(transaction);
-    signature = await input.connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 5 });
-  } else {
-    const sent = await input.wallet.signAndSendTransaction!(transaction);
-    signature = typeof sent === "string" ? sent : sent.signature;
-  }
-  const confirmation = await input.connection.confirmTransaction({
-    signature,
-    blockhash: blockhash.blockhash,
-    lastValidBlockHeight: blockhash.lastValidBlockHeight,
-  }, "confirmed");
-  if (confirmation.value.err) throw new Error(`${input.label}_transaction_failed: ${JSON.stringify(confirmation.value.err)}`);
-  return signature;
-}
-
-function delegatedAccountKeys(account: PublicKey, programId: PublicKey, validator: PublicKey) {
-  return [
-    { pubkey: delegateBufferPdaFromDelegatedAccountAndOwnerProgram(account, programId), isWritable: true, isSigner: false },
-    { pubkey: delegationRecordPdaFromDelegatedAccount(account), isWritable: true, isSigner: false },
-    { pubkey: delegationMetadataPdaFromDelegatedAccount(account), isWritable: true, isSigner: false },
-    { pubkey: account, isWritable: true, isSigner: false },
-    { pubkey: validator, isWritable: false, isSigner: false },
-    { pubkey: programId, isWritable: false, isSigner: false },
-    { pubkey: DELEGATION_PROGRAM_ID, isWritable: false, isSigner: false },
-    { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-  ];
-}
-
-export async function waitForRfqExecutionState(input: {
-  baseConnection: AccountInfoConnection;
-  teeConnection: AccountInfoConnection;
-  accounts: Record<string, PublicKey>;
-  attempts?: number;
-  retryMs?: number;
-}) {
-  const entries = Object.entries(input.accounts);
-  const attempts = input.attempts ?? 20;
-  const retryMs = input.retryMs ?? 500;
-  let unavailable = entries.map(([label]) => label);
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const addresses = entries.map(([, address]) => address);
-    const [baseInfos, teeInfos] = await Promise.all([
-      input.baseConnection.getMultipleAccountsInfo(addresses, "confirmed"),
-      input.teeConnection.getMultipleAccountsInfo(addresses, "confirmed"),
-    ]);
-    unavailable = entries.flatMap(([label], index) => {
-      if (!baseInfos[index]?.owner.equals(DELEGATION_PROGRAM_ID)) return [`${label}_not_delegated`];
-      return teeInfos[index] ? [] : [`${label}_unavailable`];
-    });
-    if (unavailable.length === 0) return;
-    if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, retryMs));
-  }
-
-  throw new Error(`rfq_state_not_ready:${unavailable.join(",")}`);
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, new Uint8Array([
+    ...RENEW_SESSION_DISCRIMINATOR,
+    ...i64(input.expiresInSeconds ?? DEFAULT_SESSION_DURATION_SECONDS),
+  ]), [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: sessionGrantPda({ matchAddress: input.matchAddress, authorityAddress: input.authorityAddress, sessionKey: input.sessionKey, programId }), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
+  ]);
 }
 
 export function createStartMatchInstruction(input: {
   matchAddress: string;
   hostAddress: string;
+  sessionKey?: PublicKey;
+  sessionGrantAddress?: string;
   roundCount?: number;
-  programId?: string;
+  programId?: string | PublicKey;
 }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  const sessionKey = input.sessionKey ?? sessionKeypairForMatch(input.matchAddress).publicKey;
+  const grant = sessionGrantAddress({ matchAddress: input.matchAddress, authorityAddress: input.hostAddress, sessionKey, sessionGrantAddress: input.sessionGrantAddress, programId });
   const roundCount = input.roundCount ?? 3;
   if (!Number.isInteger(roundCount) || roundCount < 1 || roundCount > 8) throw new Error("invalid_round_count");
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.hostAddress), isWritable: false, isSigner: true },
-    ],
-    data: Uint8Array.from([...START_MATCH_DISCRIMINATOR, roundCount]) as unknown as Buffer,
-  });
-}
-
-export function createInitializeMatchResultInstruction(input: {
-  matchAddress: string;
-  authorityAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
-      { pubkey: resultPda(input.matchAddress, programId), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.authorityAddress), isWritable: true, isSigner: true },
-      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-    ],
-    data: Buffer.from(INITIALIZE_MATCH_RESULT_DISCRIMINATOR),
-  });
-}
-
-export function createInitializeEscrowInstruction(input: {
-  matchAddress: string;
-  authorityAddress: string;
-  payoutLamports?: number;
-  programId?: string;
-}) {
-  const payoutLamports = input.payoutLamports ?? DEFAULT_MATCH_PAYOUT_LAMPORTS;
-  if (!Number.isSafeInteger(payoutLamports) || payoutLamports <= 0) throw new Error("invalid_escrow_payout");
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
-      { pubkey: escrowPda(input.matchAddress, programId), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.authorityAddress), isWritable: true, isSigner: true },
-      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-    ],
-    data: Uint8Array.from([...INITIALIZE_ESCROW_DISCRIMINATOR, ...integerBytes(payoutLamports)]) as unknown as Buffer,
-  });
-}
-
-export function createMigrateLegacyMatchInstruction(input: {
-  matchAddress: string;
-  hostAddress: string;
-  roundCount?: number;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.hostAddress), isWritable: true, isSigner: true },
-      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-    ],
-    data: Uint8Array.from(MIGRATE_LEGACY_MATCH_DISCRIMINATOR) as unknown as Buffer,
-  });
-}
-
-export async function startMatchOnchain(input: {
-  rpcUrl: string;
-  matchAddress: string;
-  hostAddress: string;
-  roundCount?: number;
-  programId?: string;
-}) {
-  const wallet = window.solana;
-  if (!wallet) throw new Error("solana_wallet_not_found");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const authority = new PublicKey(connected.publicKey);
-  if (authority.toBase58() !== input.hostAddress) throw new Error("host_wallet_mismatch");
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const connection = createBaseRpcConnection(input.rpcUrl);
-  const matchInfo = await connection.getAccountInfo(new PublicKey(input.matchAddress), "confirmed");
-  if (!matchInfo?.owner.equals(programId)) throw new Error("match_account_unavailable");
-  const matchSnapshot = decodePublicMatchAccount(input.matchAddress, matchInfo.data);
-  if (matchSnapshot.authority !== authority.toBase58()) {
-    throw new Error(`match_authority_wallet_mismatch:connect_${matchSnapshot.authority}`);
-  }
-  if (!matchSnapshot.players.includes(authority.toBase58())) throw new Error("match_authority_not_seated");
-  const transaction = new Transaction();
-  if (matchInfo.data.length < CURRENT_MATCH_BYTES) {
-    transaction.add(createMigrateLegacyMatchInstruction({ ...input, hostAddress: authority.toBase58() }));
-  }
-  transaction.add(createStartMatchInstruction({ ...input, hostAddress: authority.toBase58() }));
-  transaction.add(createInitializeEscrowInstruction({
-    matchAddress: input.matchAddress,
-    authorityAddress: authority.toBase58(),
-    programId: input.programId,
-  }));
-  transaction.add(createPrepareRfqRoundInstruction({
-    matchAddress: input.matchAddress,
-    takerAddress: authority.toBase58(),
-    round: 0,
-    programId: input.programId,
-  }));
-  transaction.add(createInitializeMatchResultInstruction({
-    matchAddress: input.matchAddress,
-    authorityAddress: authority.toBase58(),
-    programId: input.programId,
-  }));
-  transaction.feePayer = authority;
-  const blockhash = await connection.getLatestBlockhash("confirmed");
-  transaction.recentBlockhash = blockhash.blockhash;
-  transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
-  const simulation = await connection.simulateTransaction(transaction);
-  if (simulation.value.err) throw new Error(startMatchSimulationError(simulation.value, [
-    ...(matchInfo.data.length < CURRENT_MATCH_BYTES ? ["migrate_legacy_match"] : []),
-    "start_match",
-    "initialize_escrow",
-    "prepare_rfq_round",
-    "initialize_match_result",
-  ]));
-  const sent = await wallet.signAndSendTransaction(transaction);
-  const signature = typeof sent === "string" ? sent : sent.signature;
-  await connection.confirmTransaction({ signature, blockhash: blockhash.blockhash, lastValidBlockHeight: blockhash.lastValidBlockHeight }, "confirmed");
-  return { walletAddress: authority.toBase58(), signature };
-}
-
-export async function prepareRfqRoundOnchain(input: {
-  rpcUrl: string;
-  matchAddress: string;
-  takerAddress: string;
-  round: number;
-  programId?: string;
-}) {
-  const wallet = window.solana;
-  if (!wallet) throw new Error("solana_wallet_not_found");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const taker = new PublicKey(connected.publicKey);
-  if (taker.toBase58() !== input.takerAddress) throw new Error("round_taker_wallet_mismatch");
-
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const connection = createBaseRpcConnection(input.rpcUrl);
-  const matchInfo = await connection.getAccountInfo(new PublicKey(input.matchAddress), "confirmed");
-  if (!matchInfo?.owner.equals(programId)) throw new Error("match_account_unavailable");
-  const snapshot = decodePublicMatchAccount(input.matchAddress, matchInfo.data);
-  if (snapshot.status !== "STARTED" || snapshot.currentRound !== input.round || snapshot.taker !== taker.toBase58()) {
-    throw new Error("round_preparation_not_current_taker");
-  }
-
-  const roundAddress = roundPda(input.matchAddress, input.round, programId);
-  const existing = await connection.getAccountInfo(roundAddress, "confirmed");
-  if (existing) {
-    if (existing.owner.equals(programId) && existing.data.length >= 100 && existing.data[99] === 2) {
-      return { walletAddress: taker.toBase58(), alreadyPrepared: true };
-    }
-    throw new Error("round_preparation_unavailable");
-  }
-
-  const signature = await sendWalletTransaction({
-    connection,
-    wallet,
-    payer: taker,
-    instructions: [createPrepareRfqRoundInstruction({
-      matchAddress: input.matchAddress,
-      takerAddress: taker.toBase58(),
-      round: input.round,
-      programId: programId.toBase58(),
-    })],
-    label: "prepare_rfq_round",
-  });
-  return { walletAddress: taker.toBase58(), signature, alreadyPrepared: false };
-}
-
-export function createInitializeOracleInstruction(input: {
-  authorityAddress: string;
-  priceUpdateAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const authority = new PublicKey(input.authorityAddress);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: oraclePda(programId), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.priceUpdateAddress), isWritable: false, isSigner: false },
-      { pubkey: authority, isWritable: true, isSigner: true },
-      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-    ],
-    data: Uint8Array.from([...INITIALIZE_ORACLE_DISCRIMINATOR, ...ORACLE_FEED_ID]) as unknown as Buffer,
-  });
-}
-
-export function createInitializeOracleUnpricedInstruction(input: {
-  authorityAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const authority = new PublicKey(input.authorityAddress);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: oraclePda(programId), isWritable: true, isSigner: false },
-      { pubkey: authority, isWritable: true, isSigner: true },
-      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-    ],
-    data: Uint8Array.from([...INITIALIZE_ORACLE_UNPRICED_DISCRIMINATOR, ...ORACLE_FEED_ID]) as unknown as Buffer,
-  });
-}
-
-export function createPrepareRfqRoundInstruction(input: {
-  matchAddress: string;
-  takerAddress: string;
-  round: number;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
-      { pubkey: roundPda(input.matchAddress, input.round, programId), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.takerAddress), isWritable: true, isSigner: true },
-      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-    ],
-    data: Buffer.from(PREPARE_RFQ_ROUND_DISCRIMINATOR),
-  });
-}
-
-export function createDelegateRoundInstruction(input: {
-  matchAddress: string;
-  round: number;
-  authorityAddress: string;
-  validator: PublicKey;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const round = roundPda(input.matchAddress, input.round, programId);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
-      ...delegatedAccountKeys(round, programId, input.validator),
-    ],
-    data: Buffer.from([...DELEGATE_ROUND_DISCRIMINATOR, ...new PublicKey(input.matchAddress).toBytes(), input.round]),
-  });
-}
-
-export function createUpdateOracleInstruction(input: {
-  authorityAddress: string;
-  priceUpdateAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: oraclePda(programId), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.priceUpdateAddress), isWritable: false, isSigner: false },
-      { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
-    ],
-    data: Buffer.from(UPDATE_ORACLE_DISCRIMINATOR),
-  });
+  return instruction(programId, new Uint8Array([...START_MATCH_DISCRIMINATOR, ...u8(roundCount)]), [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.hostAddress), isWritable: false, isSigner: false },
+    { pubkey: sessionKey, isWritable: false, isSigner: true },
+    { pubkey: grant, isWritable: false, isSigner: false },
+  ]);
 }
 
 export function createOpenRfqInstruction(input: {
   matchAddress: string;
-  playerAddress: string;
-  programId?: string;
-  round: number;
-  side: TradeIntent["side"];
-  quantity: TradeIntent["quantity"];
-  quoteWindowSeconds?: number;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const match = new PublicKey(input.matchAddress);
-  const player = new PublicKey(input.playerAddress);
-  const quoteWindowSeconds = input.quoteWindowSeconds ?? DEFAULT_QUOTE_WINDOW_SECONDS;
-  if (!Number.isInteger(quoteWindowSeconds) || quoteWindowSeconds < 1 || quoteWindowSeconds > 30) throw new Error("invalid_quote_window");
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: match, isWritable: false, isSigner: false },
-      { pubkey: roundPda(input.matchAddress, input.round, programId), isWritable: true, isSigner: false },
-      { pubkey: oraclePda(programId), isWritable: false, isSigner: false },
-      { pubkey: player, isWritable: false, isSigner: true },
-    ],
-    data: Uint8Array.from([
-      ...OPEN_RFQ_DISCRIMINATOR,
-      input.side === "BUY" ? 0 : 1,
-      ...integerBytes(input.quantity),
-      ...integerBytes(quoteWindowSeconds, true),
-    ]) as unknown as Buffer,
-  });
-}
-
-export type OpenRfqInput = {
-  rpcUrl?: string;
-  baseRpcUrl?: string;
-  teeRpcUrl?: string;
-  matchAddress: string;
-  hostAddress?: string;
-  programId?: string;
-  round: number;
-  intent: TradeIntent;
-  priceUpdates: string[];
-  onProgress?: RfqProgress;
-};
-
-export async function openRfqOnchain(input: OpenRfqInput) {
-  try {
-    return await openRfqOnchainInner(input);
-  } catch (reason) {
-    if (reason instanceof RfqSubmissionError) throw reason;
-    if (reason instanceof PythSubmissionError) {
-      const stage = reason.stage === "simulation"
-        ? "simulation"
-        : reason.stage === "confirmation"
-          ? "confirmation"
-          : reason.stage === "wallet"
-            ? "wallet"
-            : "price";
-      throw rfqFailure(stage, `rfq_pyth_${reason.stage}_failed`, reason);
-    }
-    const message = reason instanceof Error ? reason.message : "";
-    if (/simulation_failed/i.test(message)) throw rfqFailure("simulation", "rfq_simulation_failed", reason);
-    if (/tee_|undelegate_oracle/i.test(message)) throw rfqFailure("tee", "rfq_tee_recovery_failed", reason);
-    if (/429|too many requests|rate limit/i.test(message)) throw rfqFailure("state", "rfq_base_rpc_rate_limited", reason);
-    throw rfqFailure("state", "rfq_setup_failed", reason);
-  }
-}
-
-async function openRfqOnchainInner(input: OpenRfqInput) {
-  input.onProgress?.("Checking RFQ state on Base…");
-  const wallet = window.solana;
-  if (!wallet) throw new Error("solana_wallet_not_found");
-  if (!wallet.signTransaction) throw new Error("wallet_transaction_signing_unavailable");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const player = new PublicKey(connected.publicKey);
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const baseRpcUrl = input.baseRpcUrl ?? input.rpcUrl ?? "https://api.devnet.solana.com";
-  const teeRpcUrl = input.teeRpcUrl ?? "https://devnet-tee.magicblock.app";
-  const baseConnection = createBaseRpcConnection(baseRpcUrl);
-  const match = new PublicKey(input.matchAddress);
-  const matchInfo = await baseConnection.getAccountInfo(match, "confirmed");
-  if (!matchInfo) throw new Error("match_account_unavailable");
-  if (!matchInfo.owner.equals(programId)) throw new Error("match_account_must_be_on_base");
-
-  const matchSnapshot = decodePublicMatchAccount(input.matchAddress, matchInfo.data);
-  if (matchSnapshot.status !== "STARTED") throw new Error("match_not_started");
-  if (matchSnapshot.currentRound !== input.round) throw new Error("round_state_mismatch");
-  const host = new PublicKey(input.hostAddress ?? matchSnapshot.host ?? matchSnapshot.players[0]);
-  const taker = new PublicKey(matchSnapshot.taker ?? matchSnapshot.players[input.round % matchSnapshot.playerCount]);
-  if (!taker.equals(player)) throw new Error("taker_wallet_mismatch");
-
-  const validator = teeValidatorForRpc(teeRpcUrl);
-  const oracleAddress = oraclePda(programId);
-  const roundAddress = roundPda(input.matchAddress, input.round, programId);
-  const [roundInfo, initialOracleInfo] = await Promise.all([
-    baseConnection.getAccountInfo(roundAddress, "confirmed"),
-    baseConnection.getAccountInfo(oracleAddress, "confirmed"),
-  ]);
-  let oracleInfo = initialOracleInfo;
-  const baseInstructions: TransactionInstruction[] = [];
-
-  if (!roundInfo || !roundInfo.owner.equals(programId) || roundInfo.data.length < 100 || roundInfo.data[99] !== 2) {
-    throw new Error("rfq_round_not_prepared");
-  }
-
-  if (!oracleInfo) {
-    if (!host.equals(player)) throw new Error("oracle_initialization_required_host");
-    baseInstructions.push(createInitializeOracleUnpricedInstruction({
-      authorityAddress: host.toBase58(),
-      programId: programId.toBase58(),
-    }));
-  } else if (oracleInfo.owner.equals(programId)) {
-    if (oracleInfo.data.length < 89) throw new Error("oracle_account_invalid");
-  } else if (!oracleInfo.owner.equals(DELEGATION_PROGRAM_ID)) {
-    throw new Error("oracle_account_invalid_owner");
-  } else {
-    input.onProgress?.("Restoring the RFQ oracle to Base…");
-    if (!wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
-    const session = await createPrivateConnection({
-      teeRpcUrl,
-      publicKey: player,
-      signMessage: async (message) => {
-        const signed = await wallet.signMessage!(message);
-        return signed instanceof Uint8Array ? signed : signed.signature;
-      },
-    });
-    const feePayer = await ensureTeeFeePayer({
-      baseRpcUrl,
-      teeRpcUrl,
-      teeConnection: session.connection,
-      player,
-      wallet,
-      programId,
-    });
-    await sendTeeTransaction({
-      connection: session.connection,
-      feePayer,
-      instructions: [createUndelegateOracleInstruction({
-        oracleAddress,
-        payer: feePayer.publicKey,
-        magicFeeVaultAddress: magicFeeVaultPdaFromValidator(validator).toBase58(),
-        programId: programId.toBase58(),
-      })],
-      label: "undelegate_oracle",
-    });
-    await waitForBaseProgramAccount(baseConnection, oracleAddress, programId);
-    oracleInfo = await baseConnection.getAccountInfo(oracleAddress, "confirmed");
-    if (!oracleInfo || !oracleInfo.owner.equals(programId) || oracleInfo.data.length < 89) {
-      throw new Error("oracle_restore_not_confirmed");
-    }
-  }
-
-  const posted = await postPythPriceAndConsume({
-    connection: baseConnection,
-    wallet,
-    feedId: ORACLE_FEED_ID_HEX,
-    priceUpdates: input.priceUpdates,
-    onProgress: input.onProgress,
-    createConsumerInstructions: (priceUpdate) => [
-      ...baseInstructions,
-      createUpdateOracleInstruction({
-        authorityAddress: player.toBase58(),
-        priceUpdateAddress: priceUpdate.toBase58(),
-        programId: programId.toBase58(),
-      }),
-      createOpenRfqInstruction({
-        matchAddress: input.matchAddress,
-        playerAddress: player.toBase58(),
-        programId: programId.toBase58(),
-        round: input.round,
-        side: input.intent.side,
-        quantity: input.intent.quantity,
-      }),
-      createDelegateRoundInstruction({
-        matchAddress: input.matchAddress,
-        round: input.round,
-        authorityAddress: player.toBase58(),
-        validator,
-        programId: programId.toBase58(),
-      }),
-    ],
-  });
-
-  return { walletAddress: player.toBase58(), signature: posted.signature, baseSignature: posted.signature };
-}
-
-export function createSettleMatchInstruction(input: {
-  matchAddress: string;
-  resultAddress: string;
-  winnerAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const match = new PublicKey(input.matchAddress);
-  const result = new PublicKey(input.resultAddress);
-  if (!result.equals(resultPda(input.matchAddress, programId))) throw new Error("invalid_result_pda");
-  const winner = new PublicKey(input.winnerAddress);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: match, isWritable: false, isSigner: false },
-      { pubkey: result, isWritable: true, isSigner: false },
-      { pubkey: escrowPda(input.matchAddress, programId), isWritable: true, isSigner: false },
-      { pubkey: winner, isWritable: true, isSigner: true },
-    ],
-    data: Uint8Array.from(SETTLE_MATCH_DISCRIMINATOR) as unknown as Buffer,
-  });
-}
-
-export function createFinalizeScoresInstruction(input: {
-  matchAddress: string;
-  resultAddress: string;
   authorityAddress: string;
-  remainingAccounts?: TransactionInstruction["keys"];
-  programId?: string;
+  sessionKey: PublicKey;
+  sessionGrantAddress?: string;
+  side: "BUY" | "SELL" | number;
+  quantityLots: bigint | number;
+  quoteWindowSeconds?: bigint | number;
+  oracleAddress?: string;
+  programId?: string | PublicKey;
 }) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  if (!new PublicKey(input.resultAddress).equals(resultPda(input.matchAddress, programId))) throw new Error("invalid_result_pda");
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
-      { pubkey: new PublicKey(input.resultAddress), isWritable: true, isSigner: false },
-      { pubkey: oraclePda(programId), isWritable: false, isSigner: false },
-      { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
-      ...(input.remainingAccounts ?? []),
-    ],
-    data: Buffer.from(FINALIZE_SCORES_DISCRIMINATOR),
-  });
-}
-
-export async function settleMatchOnchain(input: {
-  rpcUrl: string;
-  matchAddress: string;
-  resultAddress: string;
-  winnerAddress: string;
-  programId?: string;
-}) {
-  const wallet = window.solana;
-  if (!wallet) throw new Error("solana_wallet_not_found");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const winner = new PublicKey(connected.publicKey);
-  if (winner.toBase58() !== input.winnerAddress) throw new Error("settlement_wallet_mismatch");
-  const programId = input.programId ?? PROGRAM_ID.toBase58();
-  const connection = createBaseRpcConnection(input.rpcUrl);
-  const escrow = escrowPda(input.matchAddress, new PublicKey(programId));
-  const escrowInfo = await connection.getAccountInfo(escrow, "confirmed");
-  if (!escrowInfo) throw new Error("settlement_escrow_missing_release_required");
-  const transaction = new Transaction().add(createSettleMatchInstruction({ ...input, programId }));
-  transaction.feePayer = winner;
-  const blockhash = await connection.getLatestBlockhash("confirmed");
-  transaction.recentBlockhash = blockhash.blockhash;
-  transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
-  const simulation = await connection.simulateTransaction(transaction);
-  if (simulation.value.err) {
-    const relevantLog = simulation.value.logs?.find((log) => /Error|failed|constraint|insufficient|escrow/i.test(log));
-    throw new Error(`settle_match_simulation_failed: ${relevantLog ?? JSON.stringify(simulation.value.err)}`);
-  }
-  const sent = await wallet.signAndSendTransaction(transaction);
-  const signature = typeof sent === "string" ? sent : sent.signature;
-  await connection.confirmTransaction({ signature, blockhash: blockhash.blockhash, lastValidBlockHeight: blockhash.lastValidBlockHeight }, "confirmed");
-  return { walletAddress: winner.toBase58(), signature };
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  const grant = sessionGrantAddress({ matchAddress: input.matchAddress, authorityAddress: input.authorityAddress, sessionKey: input.sessionKey, sessionGrantAddress: input.sessionGrantAddress, programId });
+  const quantity = BigInt(input.quantityLots);
+  if (![1n, 2n, 5n].includes(quantity)) throw new Error("invalid_quantity");
+  const oracle = input.oracleAddress ? new PublicKey(input.oracleAddress) : oraclePda(programId);
+  return instruction(programId, new Uint8Array([
+    ...OPEN_RFQ_DISCRIMINATOR,
+    ...u8(sideValue(input.side)),
+    ...u64(quantity),
+    ...i64(input.quoteWindowSeconds ?? DEFAULT_QUOTE_WINDOW_SECONDS),
+  ]), [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: runtimePda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    { pubkey: oracle, isWritable: false, isSigner: false },
+    { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: false },
+    { pubkey: input.sessionKey, isWritable: false, isSigner: true },
+    { pubkey: grant, isWritable: false, isSigner: false },
+  ]);
 }
 
 export function createSubmitQuoteInstruction(input: {
   matchAddress: string;
-  dealerAddress: string;
-  round: number;
-  priceE6: number | bigint;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const match = new PublicKey(input.matchAddress);
-  const dealer = new PublicKey(input.dealerAddress);
-  const priceE6 = BigInt(input.priceE6);
-  if (priceE6 <= 0n || priceE6 > 9_223_372_036_854_775_807n) throw new Error("invalid_quote_price");
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: match, isWritable: false, isSigner: false },
-      { pubkey: roundPda(input.matchAddress, input.round, programId), isWritable: true, isSigner: false },
-      { pubkey: privateQuotePda({ matchAddress: match, round: input.round, dealer, programId }), isWritable: true, isSigner: false },
-      { pubkey: dealer, isWritable: false, isSigner: true },
-    ],
-    data: Uint8Array.from([
-      ...SUBMIT_QUOTE_DISCRIMINATOR,
-      ...integerBytes(priceE6, true),
-    ]) as unknown as Buffer,
-  });
-}
-
-export function createAuthorizeQuoteSessionInstruction(input: {
-  matchAddress: string;
   authorityAddress: string;
   sessionKey: PublicKey;
-  programId?: PublicKey;
-}) {
-  const programId = input.programId ?? PROGRAM_ID;
-  const authority = new PublicKey(input.authorityAddress);
-  const sessionGrant = sessionGrantPda({
-    matchAddress: input.matchAddress,
-    authorityAddress: authority.toBase58(),
-    sessionKey: input.sessionKey,
-    programId,
-  });
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
-      { pubkey: sessionGrant, isWritable: true, isSigner: false },
-      { pubkey: authority, isWritable: true, isSigner: true },
-      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-    ],
-    data: Uint8Array.from([
-      ...AUTHORIZE_SESSION_DISCRIMINATOR,
-      ...input.sessionKey.toBytes(),
-      ...integerBytes(QUOTE_SESSION_DURATION_SECONDS, true),
-      QUOTE_SESSION_ACTION,
-    ]) as unknown as Buffer,
-  });
-}
-
-export function createSubmitQuoteSessionInstruction(input: {
-  matchAddress: string;
-  dealerAddress: string;
-  round: number;
-  priceE6: number | bigint;
-  sessionKey: PublicKey;
+  sessionGrantAddress?: string;
+  quoteAddress?: string;
+  priceE6: bigint | number;
   programId?: string | PublicKey;
 }) {
-  const programId = input.programId instanceof PublicKey
-    ? input.programId
-    : new PublicKey(input.programId ?? PROGRAM_ID);
-  const dealer = new PublicKey(input.dealerAddress);
-  const priceE6 = BigInt(input.priceE6);
-  if (priceE6 <= 0n || priceE6 > 9_223_372_036_854_775_807n) throw new Error("invalid_quote_price");
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
-      { pubkey: roundPda(input.matchAddress, input.round, programId), isWritable: true, isSigner: false },
-      { pubkey: dealer, isWritable: false, isSigner: false },
-      { pubkey: privateQuotePda({ matchAddress: new PublicKey(input.matchAddress), round: input.round, dealer, programId }), isWritable: true, isSigner: false },
-      { pubkey: input.sessionKey, isWritable: false, isSigner: true },
-      { pubkey: sessionGrantPda({ matchAddress: input.matchAddress, authorityAddress: dealer.toBase58(), sessionKey: input.sessionKey, programId }), isWritable: false, isSigner: false },
-    ],
-    data: Uint8Array.from([
-      ...SUBMIT_QUOTE_SESSION_DISCRIMINATOR,
-      ...integerBytes(priceE6, true),
-    ]) as unknown as Buffer,
-  });
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  const quote = input.quoteAddress ? new PublicKey(input.quoteAddress) : privateQuotePda({ matchAddress: new PublicKey(input.matchAddress), dealer: new PublicKey(input.authorityAddress), programId });
+  return instruction(programId, new Uint8Array([...SUBMIT_QUOTE_DISCRIMINATOR, ...i64(input.priceE6)]), [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: runtimePda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: false },
+    { pubkey: quote, isWritable: true, isSigner: false },
+    { pubkey: input.sessionKey, isWritable: false, isSigner: true },
+    { pubkey: sessionGrantAddress({ matchAddress: input.matchAddress, authorityAddress: input.authorityAddress, sessionKey: input.sessionKey, sessionGrantAddress: input.sessionGrantAddress, programId }), isWritable: false, isSigner: false },
+  ]);
 }
 
-export async function submitPrivateQuoteOnchain(input: {
-  baseRpcUrl: string;
-  teeRpcUrl: string;
-  matchAddress: string;
-  dealerAddress: string;
-  round: number;
-  priceE6: number | bigint;
-  programId?: string;
-}) {
-  const wallet = window.solana;
-  if (!wallet) throw new Error("solana_wallet_not_found");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const dealer = new PublicKey(connected.publicKey);
-  if (dealer.toBase58() !== input.dealerAddress) throw new Error("quote_wallet_mismatch");
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const { connection, feePayer } = getPreparedPrivateQuote({
+export function createInitializeOracleInstruction(input: { authorityAddress: string; priceFeedAddress?: string; feedId: Uint8Array; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, new Uint8Array([...INITIALIZE_ORACLE_DISCRIMINATOR, ...bytes32(input.feedId)]), [
+    { pubkey: oraclePda(programId), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.priceFeedAddress ?? PYTH_SOL_USD_PUSH_FEED.toBase58()), isWritable: false, isSigner: false },
+    { pubkey: new PublicKey(input.authorityAddress), isWritable: true, isSigner: true },
+    { pubkey: SYSTEM_PROGRAM_ID, isWritable: false, isSigner: false },
+  ]);
+}
+
+export function createInitializeOracleUnpricedInstruction(input: { authorityAddress: string; feedId: Uint8Array; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, new Uint8Array([...INITIALIZE_ORACLE_UNPRICED_DISCRIMINATOR, ...bytes32(input.feedId)]), [
+    { pubkey: oraclePda(programId), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.authorityAddress), isWritable: true, isSigner: true },
+    { pubkey: SYSTEM_PROGRAM_ID, isWritable: false, isSigner: false },
+  ]);
+}
+
+export function createUpdateOracleInstruction(input: { priceFeedAddress?: string; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, UPDATE_ORACLE_DISCRIMINATOR, [
+    { pubkey: oraclePda(programId), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.priceFeedAddress ?? PYTH_SOL_USD_PUSH_FEED.toBase58()), isWritable: false, isSigner: false },
+  ]);
+}
+
+export function createInitializeMatchResultInstruction(input: { matchAddress: string; authorityAddress: string; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, INITIALIZE_MATCH_RESULT_DISCRIMINATOR, [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: resultPda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.authorityAddress), isWritable: true, isSigner: true },
+    { pubkey: SYSTEM_PROGRAM_ID, isWritable: false, isSigner: false },
+  ]);
+}
+
+export function createInitializeEscrowInstruction(input: { matchAddress: string; authorityAddress: string; payoutLamports?: bigint | number; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, new Uint8Array([...INITIALIZE_ESCROW_DISCRIMINATOR, ...u64(input.payoutLamports ?? DEFAULT_MATCH_PAYOUT_LAMPORTS)]), [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: escrowPda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.authorityAddress), isWritable: true, isSigner: true },
+    { pubkey: SYSTEM_PROGRAM_ID, isWritable: false, isSigner: false },
+  ]);
+}
+
+export function createResolveRoundInstruction(input: { matchAddress: string; takerAddress: string; quoteAddresses: string[]; inventoryAddresses: string[]; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  const match = new PublicKey(input.matchAddress);
+  return instruction(programId, RESOLVE_ROUND_DISCRIMINATOR, [
+    { pubkey: match, isWritable: false, isSigner: false },
+    { pubkey: runtimePda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    { pubkey: privateInventoryPda({ matchAddress: match, player: new PublicKey(input.takerAddress), programId }), isWritable: true, isSigner: false },
+    ...input.quoteAddresses.map((address) => ({ pubkey: new PublicKey(address), isWritable: false, isSigner: false })),
+    ...input.inventoryAddresses.map((address) => ({ pubkey: new PublicKey(address), isWritable: true, isSigner: false })),
+  ]);
+}
+
+export function createSkipEmptyRoundInstruction(input: { matchAddress: string; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, SKIP_EMPTY_ROUND_DISCRIMINATOR, [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: runtimePda(input.matchAddress, programId), isWritable: true, isSigner: false },
+  ]);
+}
+
+export function createAdvanceRoundInstruction(input: { matchAddress: string; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, ADVANCE_ROUND_DISCRIMINATOR, [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: runtimePda(input.matchAddress, programId), isWritable: true, isSigner: false },
+  ]);
+}
+
+export const createNextRoundInstruction = createAdvanceRoundInstruction;
+
+export function createFinalizeRuntimeInstruction(input: { matchAddress: string; inventoryAddresses: string[]; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, FINALIZE_RUNTIME_DISCRIMINATOR, [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: runtimePda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    ...input.inventoryAddresses.map((address) => ({ pubkey: new PublicKey(address), isWritable: false, isSigner: false })),
+  ]);
+}
+
+export function createFinalizeMatchInstruction(input: { matchAddress: string; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, FINALIZE_MATCH_DISCRIMINATOR, [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
+    { pubkey: runtimePda(input.matchAddress, programId), isWritable: false, isSigner: false },
+    { pubkey: resultPda(input.matchAddress, programId), isWritable: true, isSigner: false },
+  ]);
+}
+
+export function createSettleMatchInstruction(input: { matchAddress: string; winnerAddress: string; programId?: string | PublicKey }) {
+  const programId = typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId ?? PROGRAM_ID;
+  return instruction(programId, SETTLE_MATCH_DISCRIMINATOR, [
+    { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
+    { pubkey: resultPda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    { pubkey: escrowPda(input.matchAddress, programId), isWritable: true, isSigner: false },
+    { pubkey: new PublicKey(input.winnerAddress), isWritable: true, isSigner: false },
+  ]);
+}
+
+async function authenticatedConnection(input: { baseRpcUrl: string; teeRpcUrl?: string; session: Keypair; programId: PublicKey }) {
+  if (!input.teeRpcUrl) return { connection: createBaseRpcConnection(input.baseRpcUrl), feePayer: input.session };
+  const session = input.session;
+  const authenticated = await createPrivateConnection({
     teeRpcUrl: input.teeRpcUrl,
-    matchAddress: new PublicKey(input.matchAddress),
-    dealer,
-    round: input.round,
-    programId,
+    publicKey: session.publicKey,
+    signMessage: async (message) => nacl.sign.detached(message, session.secretKey),
   });
-  const session = getPreparedQuoteSession({
+  const feePayer = teeFeePayerForRpc(input.teeRpcUrl, input.programId);
+  if (!feePayer) throw new RfqSubmissionError("state", "tee_fee_payer_setup_required");
+  return { connection: authenticated.connection, feePayer };
+}
+
+async function sendSessionTransaction(connection: Connection, session: Keypair, feePayer: Keypair, instructions: TransactionInstruction[]) {
+  const blockhash = await connection.getLatestBlockhash("confirmed");
+  const transaction = new Transaction({ feePayer: feePayer.publicKey, recentBlockhash: blockhash.blockhash }).add(...instructions);
+  transaction.lastValidBlockHeight = blockhash.lastValidBlockHeight;
+  transaction.partialSign(feePayer);
+  if (!feePayer.publicKey.equals(session.publicKey)) transaction.partialSign(session);
+  const signature = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 5 });
+  const confirmation = await connection.confirmTransaction({ signature, blockhash: blockhash.blockhash, lastValidBlockHeight: blockhash.lastValidBlockHeight }, "confirmed");
+  if (confirmation.value.err) throw new RfqSubmissionError("confirmation", "session_transaction_failed", JSON.stringify(confirmation.value.err));
+  return signature;
+}
+
+async function requestCrank(input: { operation: string; baseRpcUrl: string; programId: string; matchAddress: string; payload?: Record<string, unknown> }) {
+  const relayUrl = (import.meta.env?.VITE_OUTCRY_RELAYER_URL || worldApiBaseUrl()).replace(/\/$/, "");
+  let response: Response;
+  try {
+    response = await fetch(`${relayUrl}/v1/outcry/crank`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operation: input.operation, baseRpcUrl: input.baseRpcUrl, programId: input.programId, matchAddress: input.matchAddress, ...input.payload }),
+    });
+  } catch {
+    throw new RfqSubmissionError("relay", "permissionless_relayer_unreachable");
+  }
+  const body = await response.json().catch(() => ({})) as { signature?: string; applied?: boolean; error?: string; stage?: string };
+  if (!response.ok || (!body.signature && body.applied !== true)) throw new RfqSubmissionError("relay", body.error ?? "permissionless_relayer_failed", body.stage);
+  return body.signature ?? "applied";
+}
+
+export async function startMatchOnchain(input: { rpcUrl: string; matchAddress: string; hostAddress: string; roundCount?: number; programId: string; sessionKeypair?: Keypair }) {
+  const session = input.sessionKeypair ?? sessionKeypairForMatch(input.matchAddress);
+  const signature = await sendSessionTransaction(createBaseRpcConnection(input.rpcUrl), session, session, [createStartMatchInstruction({ matchAddress: input.matchAddress, hostAddress: input.hostAddress, sessionKey: session.publicKey, roundCount: input.roundCount, programId: input.programId })]);
+  return { signature, sessionKey: session.publicKey.toBase58() };
+}
+
+export async function openRfqOnchain(input: {
+  baseRpcUrl: string;
+  teeRpcUrl?: string;
+  matchAddress: string;
+  matchId: string;
+  sessionId: string;
+  authorityAddress: string;
+  programId: string;
+  intent: TradeIntent;
+  quoteWindowSeconds?: number;
+  onProgress?: RfqProgress;
+  sessionKeypair?: Keypair;
+}) {
+  const session = input.sessionKeypair ?? sessionKeypairForMatch(input.matchAddress);
+  await validateOpenRfqSession({
     baseRpcUrl: input.baseRpcUrl,
     matchAddress: input.matchAddress,
-    dealer,
-    programId,
+    authorityAddress: input.authorityAddress,
+    session,
+    programId: new PublicKey(input.programId),
   });
-  const signature = await sendTeeTransaction({
-    connection,
-    feePayer,
-    additionalSigners: [session.signer],
-    instructions: [createSubmitQuoteSessionInstruction({
-      ...input,
-      dealerAddress: dealer.toBase58(),
-      sessionKey: session.signer.publicKey,
-      programId,
-    })],
-    label: "submit_quote_session",
-  });
-  return { walletAddress: dealer.toBase58(), signature };
+  input.onProgress?.("Refreshing the sponsored Pyth push feed…");
+  let oracleResponse: Response;
+  try {
+    oracleResponse = await fetch(`${worldApiBaseUrl()}/api/oracle/sol-usd-update`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-outcry-session-id": input.sessionId,
+        "x-outcry-match-id": input.matchId,
+      },
+    });
+  } catch {
+    throw new RfqSubmissionError("relay", "oracle_relayer_unreachable");
+  }
+  const oracleBody = await oracleResponse.json().catch(() => ({})) as { signature?: string; error?: string; stage?: string };
+  if (!oracleResponse.ok || !oracleBody.signature) {
+    throw new RfqSubmissionError("relay", oracleBody.error ?? "oracle_relayer_failed", oracleBody.stage);
+  }
+  input.onProgress?.("Submitting the RFQ through your authorized session…");
+  const authenticated = await authenticatedConnection({ baseRpcUrl: input.baseRpcUrl, teeRpcUrl: input.teeRpcUrl, session, programId: new PublicKey(input.programId) });
+  try {
+    const signature = await sendSessionTransaction(authenticated.connection, session, authenticated.feePayer, [createOpenRfqInstruction({
+      matchAddress: input.matchAddress,
+      authorityAddress: input.authorityAddress,
+      sessionKey: session.publicKey,
+      side: input.intent.side,
+      quantityLots: input.intent.quantity,
+      quoteWindowSeconds: input.quoteWindowSeconds,
+      programId: input.programId,
+    })]);
+    return { signature, sessionKey: session.publicKey.toBase58() };
+  } catch (reason) {
+    throw normalizeRfqError(reason);
+  }
 }
 
-export async function preparePrivateQuoteOnchain(input: {
-  baseRpcUrl: string;
-  teeRpcUrl: string;
-  matchAddress: string;
-  dealerAddress: string;
-  round: number;
-  programId?: string;
-}) {
-  const wallet = window.solana;
-  if (!wallet?.signTransaction) throw new Error("wallet_transaction_signing_unavailable");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const dealer = new PublicKey(connected.publicKey);
-  if (dealer.toBase58() !== input.dealerAddress) throw new Error("quote_wallet_mismatch");
-
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const baseConnection = createBaseRpcConnection(input.baseRpcUrl);
-  const roundInfo = await baseConnection.getAccountInfo(roundPda(input.matchAddress, input.round, programId), "confirmed");
-  if (!roundInfo?.owner.equals(programId) || roundInfo.data.length < 100 || roundInfo.data[99] !== 2) {
-    throw new Error("private_quote_preparation_requires_prepared_round");
-  }
-  await preparePrivateQuote({
-    baseRpcUrl: input.baseRpcUrl,
-    teeRpcUrl: input.teeRpcUrl,
-    matchAddress: new PublicKey(input.matchAddress),
-    dealer,
-    round: input.round,
-    wallet,
-    programId,
-  });
-  await prepareQuoteSession({
-    baseConnection,
-    wallet,
-    baseRpcUrl: input.baseRpcUrl,
+export async function submitPrivateQuoteOnchain(input: { baseRpcUrl: string; teeRpcUrl?: string; matchAddress: string; dealerAddress: string; priceE6: number; programId: string; sessionKeypair?: Keypair }) {
+  const session = input.sessionKeypair ?? sessionKeypairForMatch(input.matchAddress);
+  const authenticated = await authenticatedConnection({ baseRpcUrl: input.baseRpcUrl, teeRpcUrl: input.teeRpcUrl, session, programId: new PublicKey(input.programId) });
+  const signature = await sendSessionTransaction(authenticated.connection, session, authenticated.feePayer, [createSubmitQuoteInstruction({
     matchAddress: input.matchAddress,
-    dealer,
-    programId,
-  });
-  return { walletAddress: dealer.toBase58() };
+    authorityAddress: input.dealerAddress,
+    sessionKey: session.publicKey,
+    priceE6: input.priceE6,
+    programId: input.programId,
+  })]);
+  return { signature, sessionKey: session.publicKey.toBase58() };
 }
 
-export function createResolveRoundInstruction(input: {
-  matchAddress: string;
-  round: number;
-  takerAddress: string;
-  resolverAddress: string;
-  remainingAccounts?: TransactionInstruction["keys"];
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
-      { pubkey: roundPda(input.matchAddress, input.round, programId), isWritable: true, isSigner: false },
-      { pubkey: privateInventoryPda({ matchAddress: new PublicKey(input.matchAddress), player: new PublicKey(input.takerAddress), programId }), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.resolverAddress), isWritable: false, isSigner: true },
-      ...(input.remainingAccounts ?? []),
-    ],
-    data: Buffer.from(RESOLVE_ROUND_DISCRIMINATOR),
-  });
-}
-
-export function createSkipEmptyRoundInstruction(input: {
-  matchAddress: string;
-  round: number;
-  authorityAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: false, isSigner: false },
-      { pubkey: roundPda(input.matchAddress, input.round, programId), isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
-    ],
-    data: Buffer.from(SKIP_EMPTY_ROUND_DISCRIMINATOR),
-  });
-}
-
-export function createUndelegateRoundInstruction(input: {
-  roundAddress: PublicKey;
-  payer: PublicKey;
-  magicFeeVaultAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: input.payer, isWritable: true, isSigner: true },
-      { pubkey: input.roundAddress, isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.magicFeeVaultAddress), isWritable: true, isSigner: false },
-      { pubkey: MAGIC_PROGRAM_ID, isWritable: false, isSigner: false },
-      { pubkey: MAGIC_CONTEXT_ID, isWritable: true, isSigner: false },
-    ],
-    data: Buffer.from(UNDELEGATE_ROUND_DISCRIMINATOR),
-  });
-}
-
-export function createUndelegatePrivateQuoteInstruction(input: {
-  quoteAddress: PublicKey;
-  payer: PublicKey;
-  magicFeeVaultAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: input.payer, isWritable: true, isSigner: true },
-      { pubkey: input.quoteAddress, isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.magicFeeVaultAddress), isWritable: true, isSigner: false },
-      { pubkey: MAGIC_PROGRAM_ID, isWritable: false, isSigner: false },
-      { pubkey: MAGIC_CONTEXT_ID, isWritable: true, isSigner: false },
-    ],
-    data: Buffer.from(UNDELEGATE_PRIVATE_QUOTE_DISCRIMINATOR),
-  });
-}
-
-export function createUndelegatePrivateInventoryInstruction(input: {
-  inventoryAddress: PublicKey;
-  payer: PublicKey;
-  magicFeeVaultAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: input.payer, isWritable: true, isSigner: true },
-      { pubkey: input.inventoryAddress, isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.magicFeeVaultAddress), isWritable: true, isSigner: false },
-      { pubkey: MAGIC_PROGRAM_ID, isWritable: false, isSigner: false },
-      { pubkey: MAGIC_CONTEXT_ID, isWritable: true, isSigner: false },
-    ],
-    data: Buffer.from(UNDELEGATE_PRIVATE_INVENTORY_DISCRIMINATOR),
-  });
-}
-
-export function createUndelegateOracleInstruction(input: {
-  oracleAddress: PublicKey;
-  payer: PublicKey;
-  magicFeeVaultAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: input.payer, isWritable: true, isSigner: true },
-      { pubkey: input.oracleAddress, isWritable: true, isSigner: false },
-      { pubkey: new PublicKey(input.magicFeeVaultAddress), isWritable: true, isSigner: false },
-      { pubkey: MAGIC_PROGRAM_ID, isWritable: false, isSigner: false },
-      { pubkey: MAGIC_CONTEXT_ID, isWritable: true, isSigner: false },
-    ],
-    data: Buffer.from(UNDELEGATE_ORACLE_DISCRIMINATOR),
-  });
-}
-
-export function createNextRoundInstruction(input: {
-  matchAddress: string;
-  round: number;
-  authorityAddress: string;
-  programId?: string;
-}) {
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: new PublicKey(input.matchAddress), isWritable: true, isSigner: false },
-      { pubkey: roundPda(input.matchAddress, input.round, programId), isWritable: false, isSigner: false },
-      { pubkey: new PublicKey(input.authorityAddress), isWritable: false, isSigner: true },
-    ],
-    data: Buffer.from(NEXT_ROUND_DISCRIMINATOR),
-  });
-}
-
-async function waitForBaseProgramAccount(connection: Connection, address: PublicKey, programId: PublicKey) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const info = await connection.getAccountInfo(address, "confirmed");
-    if (info?.owner.equals(programId)) return;
-    if (attempt + 1 < 20) await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error("round_undelegation_not_confirmed");
-}
-
-async function waitForDelegatedAccounts(connection: Connection, accounts: Record<string, PublicKey>) {
-  const entries = Object.entries(accounts);
-  let unavailable: string[] = [];
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const infos = await connection.getMultipleAccountsInfo(entries.map(([, address]) => address), "confirmed");
-    unavailable = entries.flatMap(([label], index) => infos[index]?.owner.equals(DELEGATION_PROGRAM_ID) ? [] : [`${label}_not_delegated`]);
-    if (unavailable.length === 0) return;
-    if (attempt + 1 < 20) await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error(`rfq_state_not_ready:${unavailable.join(",")}`);
-}
-
-export async function resolveRoundOnchain(input: {
-  baseRpcUrl: string;
-  teeRpcUrl: string;
-  matchAddress: string;
-  round: number;
-  resolverAddress: string;
-  snapshot: ReturnType<typeof decodePublicMatchAccount>;
-  priceUpdates?: string[];
-  programId?: string;
-}) {
-  const wallet = window.solana;
-  if (!wallet?.signTransaction) throw new Error("wallet_transaction_signing_unavailable");
-  if (!wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const resolver = new PublicKey(connected.publicKey);
-  if (!resolver.equals(new PublicKey(input.resolverAddress))) throw new Error("resolver_wallet_mismatch");
-  if (input.snapshot.host !== resolver.toBase58()) throw new Error("resolver_must_be_host");
-  if (input.snapshot.stateSource !== "tee") throw new Error("live_tee_round_state_unavailable");
-  if (input.snapshot.status !== "STARTED" || input.snapshot.roundStatus !== "OPEN") throw new Error("round_not_open");
-  if (input.snapshot.currentRound !== input.round || !input.snapshot.taker) throw new Error("round_state_mismatch");
-  if (input.snapshot.quoteCount === 0) throw new Error("empty_round_requires_skip");
-  if (input.snapshot.quoteCount < input.snapshot.dealerCount && (!input.snapshot.deadlineAt || Date.now() < input.snapshot.deadlineAt)) {
-    throw new Error("quotes_not_complete");
-  }
-
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
+export async function resolveRoundOnchain(input: { baseRpcUrl: string; teeRpcUrl?: string; matchAddress: string; snapshot: PublicMatchSnapshot; programId: string }) {
+  if (input.snapshot.roundStatus !== "OPEN") throw new Error("round_not_open");
+  const dealers = input.snapshot.players.filter((player) => player !== input.snapshot.taker);
   const match = new PublicKey(input.matchAddress);
-  const taker = new PublicKey(input.snapshot.taker);
-  const dealerAddresses = input.snapshot.players
-    .map((player) => new PublicKey(player))
-    .filter((player) => !player.equals(taker));
-  const quoteAddresses = dealerAddresses.map((dealer) => privateQuotePda({ matchAddress: match, round: input.round, dealer, programId }));
-  const inventoryAddresses = input.snapshot.players.map((player) => privateInventoryPda({ matchAddress: match, player: new PublicKey(player), programId }));
-  const roundAddress = roundPda(input.matchAddress, input.round, programId);
-  const baseConnection = createBaseRpcConnection(input.baseRpcUrl);
-  const takerInventory = inventoryAddresses[input.snapshot.players.indexOf(taker.toBase58())];
-  if (!takerInventory) throw new Error("taker_inventory_unavailable");
-  const quoteInfos = await baseConnection.getMultipleAccountsInfo(quoteAddresses, "confirmed");
-  const delegatedQuoteAddresses = quoteAddresses.filter((_, index) => quoteInfos[index]?.owner.equals(DELEGATION_PROGRAM_ID));
-  if (delegatedQuoteAddresses.length < input.snapshot.quoteCount) throw new Error("sealed_quote_state_unavailable");
-
-  // Inventory state is still needed to settle the unknown winning dealer inside the TEE.
-  // Quote accounts are optional: unlocked prepared quotes are valid inputs but are ignored onchain.
-  await waitForDelegatedAccounts(baseConnection, {
-    round: roundAddress,
-    taker_inventory: takerInventory,
-    ...Object.fromEntries(inventoryAddresses.map((address, index) => [`inventory_${index}`, address])),
-  });
-
-  const session = await createPrivateConnection({
-    teeRpcUrl: input.teeRpcUrl,
-    publicKey: resolver,
-    signMessage: async (message) => {
-      const signed = await wallet.signMessage!(message);
-      return signed instanceof Uint8Array ? signed : signed.signature;
-    },
-  });
-  const feePayer = await ensureTeeFeePayer({
+  const programId = new PublicKey(input.programId);
+  const quoteAddresses = dealers.map((dealer) => privateQuotePda({ matchAddress: match, dealer: new PublicKey(dealer), programId }).toBase58());
+  const inventories = input.snapshot.players.map((player) => privateInventoryPda({ matchAddress: match, player: new PublicKey(player), programId }).toBase58());
+  return requestCrank({
+    operation: "resolve_round",
     baseRpcUrl: input.baseRpcUrl,
-    teeRpcUrl: input.teeRpcUrl,
-    teeConnection: session.connection,
-    player: resolver,
-    wallet,
-    programId,
+    programId: input.programId,
+    matchAddress: input.matchAddress,
+    payload: { quoteAddresses, inventoryAddresses: inventories },
   });
-  const magicFeeVaultAddress = magicFeeVaultPdaFromValidator(teeValidatorForRpc(input.teeRpcUrl)).toBase58();
-
-  const remainingAccounts = [
-    ...delegatedQuoteAddresses.map((pubkey) => ({ pubkey, isWritable: false, isSigner: false })),
-    ...inventoryAddresses.filter((address) => !address.equals(takerInventory)).map((pubkey) => ({ pubkey, isWritable: true, isSigner: false })),
-  ];
-  await sendTeeTransaction({
-    connection: session.connection,
-    wallet,
-    feePayer,
-    instructions: [createResolveRoundInstruction({
-      matchAddress: input.matchAddress,
-      round: input.round,
-      takerAddress: taker.toBase58(),
-      resolverAddress: resolver.toBase58(),
-      remainingAccounts,
-      programId: programId.toBase58(),
-    })],
-    label: "resolve_round",
-  });
-  await sendTeeTransaction({
-    connection: session.connection,
-    feePayer,
-    instructions: [createUndelegateRoundInstruction({ roundAddress, payer: feePayer.publicKey, magicFeeVaultAddress, programId: programId.toBase58() })],
-    label: "undelegate_round",
-  });
-  await sendTeeTransaction({
-    connection: session.connection,
-    feePayer,
-    instructions: delegatedQuoteAddresses.map((quoteAddress) => createUndelegatePrivateQuoteInstruction({
-      quoteAddress,
-      payer: feePayer.publicKey,
-      magicFeeVaultAddress,
-      programId: programId.toBase58(),
-    })),
-    label: "undelegate_quotes",
-  });
-  await waitForBaseProgramAccount(baseConnection, roundAddress, programId);
-  await Promise.all(delegatedQuoteAddresses.map((quoteAddress) => waitForBaseProgramAccount(baseConnection, quoteAddress, programId)));
-  const nextRoundSignature = await sendWalletTransaction({
-    connection: baseConnection,
-    wallet,
-    payer: resolver,
-    instructions: [createNextRoundInstruction({
-      matchAddress: input.matchAddress,
-      round: input.round,
-      authorityAddress: resolver.toBase58(),
-      programId: programId.toBase58(),
-    })],
-    label: "next_round",
-  });
-  if (input.round + 1 < input.snapshot.roundCount) return { walletAddress: resolver.toBase58(), nextRoundSignature };
-
-  await sendTeeTransaction({
-    connection: session.connection,
-    feePayer,
-    instructions: inventoryAddresses.map((inventoryAddress) => createUndelegatePrivateInventoryInstruction({
-      inventoryAddress,
-      payer: feePayer.publicKey,
-      magicFeeVaultAddress,
-      programId: programId.toBase58(),
-    })),
-    label: "undelegate_inventories",
-  });
-  await Promise.all(inventoryAddresses.map((inventoryAddress) => waitForBaseProgramAccount(baseConnection, inventoryAddress, programId)));
-  const resultAddress = resultPda(input.matchAddress, programId);
-  if (!input.priceUpdates?.length) throw new Error("final_score_price_update_required");
-  const posted = await postPythPriceAndConsume({
-    connection: baseConnection,
-    wallet,
-    feedId: ORACLE_FEED_ID_HEX,
-    priceUpdates: input.priceUpdates,
-    label: "final score price update",
-    createConsumerInstructions: (priceUpdate) => [
-      createUpdateOracleInstruction({
-        authorityAddress: resolver.toBase58(),
-        priceUpdateAddress: priceUpdate.toBase58(),
-        programId: programId.toBase58(),
-      }),
-      createFinalizeScoresInstruction({
-        matchAddress: input.matchAddress,
-        resultAddress: resultAddress.toBase58(),
-        authorityAddress: resolver.toBase58(),
-        remainingAccounts: inventoryAddresses.map((pubkey) => ({ pubkey, isWritable: false, isSigner: false })),
-        programId: programId.toBase58(),
-      }),
-    ],
-  });
-  return { walletAddress: resolver.toBase58(), nextRoundSignature, finalizeSignature: posted.signature };
 }
 
-type EmptyRoundInput = {
-  baseRpcUrl: string;
-  teeRpcUrl: string;
-  matchAddress: string;
-  round: number;
-  authorityAddress: string;
-  snapshot: ReturnType<typeof decodePublicMatchAccount>;
-  programId?: string;
-};
-
-async function emptyRoundOnchain(input: EmptyRoundInput, action: "skip" | "resume") {
-  const wallet = window.solana;
-  if (!wallet?.signTransaction) throw new Error("wallet_transaction_signing_unavailable");
-  if (!wallet.signMessage) throw new Error("wallet_message_signing_unavailable");
-  const connected = wallet.publicKey ? { publicKey: wallet.publicKey } : await wallet.connect();
-  const authority = new PublicKey(connected.publicKey);
-  if (!authority.equals(new PublicKey(input.authorityAddress))) throw new Error("skip_wallet_mismatch");
-  if (input.snapshot.host !== authority.toBase58()) throw new Error("skip_must_be_host");
-  if (input.snapshot.stateSource !== "tee") throw new Error("live_tee_round_state_unavailable");
-  if (input.snapshot.status !== "STARTED") throw new Error("round_not_started");
-  if (action === "skip" && input.snapshot.roundStatus !== "OPEN") throw new Error("round_not_open");
-  if (action === "resume" && input.snapshot.roundStatus !== "SKIPPED") throw new Error("skipped_round_required");
-  if (input.snapshot.currentRound !== input.round || !input.snapshot.taker) throw new Error("round_state_mismatch");
-  if (input.snapshot.quoteCount !== 0) throw new Error("empty_round_required");
-  if (action === "skip" && (!input.snapshot.deadlineAt || Date.now() < input.snapshot.deadlineAt)) throw new Error("skip_deadline_not_reached");
-
-  const programId = new PublicKey(input.programId ?? PROGRAM_ID);
-  const match = new PublicKey(input.matchAddress);
-  const roundAddress = roundPda(input.matchAddress, input.round, programId);
-  const baseConnection = createBaseRpcConnection(input.baseRpcUrl);
-  await waitForDelegatedAccounts(baseConnection, { round: roundAddress });
-
-  const session = await createPrivateConnection({
-    teeRpcUrl: input.teeRpcUrl,
-    publicKey: authority,
-    signMessage: async (message) => {
-      const signed = await wallet.signMessage!(message);
-      return signed instanceof Uint8Array ? signed : signed.signature;
-    },
-  });
-  const feePayer = await ensureTeeFeePayer({
-    baseRpcUrl: input.baseRpcUrl,
-    teeRpcUrl: input.teeRpcUrl,
-    teeConnection: session.connection,
-    player: authority,
-    wallet,
-    programId,
-  });
-  const magicFeeVaultAddress = magicFeeVaultPdaFromValidator(teeValidatorForRpc(input.teeRpcUrl)).toBase58();
-
-  if (action === "skip") {
-    await sendTeeTransaction({
-      connection: session.connection,
-      wallet,
-      feePayer,
-      instructions: [createSkipEmptyRoundInstruction({
-        matchAddress: input.matchAddress,
-        round: input.round,
-        authorityAddress: authority.toBase58(),
-        programId: programId.toBase58(),
-      })],
-      label: "skip_empty_round",
-    });
-  }
-  await sendTeeTransaction({
-    connection: session.connection,
-    feePayer,
-    instructions: [createUndelegateRoundInstruction({
-      roundAddress,
-      payer: feePayer.publicKey,
-      magicFeeVaultAddress,
-      programId: programId.toBase58(),
-    })],
-    label: "undelegate_skipped_round",
-  });
-
-  const quoteAddresses = input.snapshot.players
-    .map((player) => new PublicKey(player))
-    .filter((player) => !player.equals(new PublicKey(input.snapshot.taker!)))
-    .map((dealer) => privateQuotePda({ matchAddress: match, round: input.round, dealer, programId }));
-  const quoteInfos = await baseConnection.getMultipleAccountsInfo(quoteAddresses, "confirmed");
-  const delegatedQuoteAddresses = quoteAddresses.filter((_, index) => quoteInfos[index]?.owner.equals(DELEGATION_PROGRAM_ID));
-  if (delegatedQuoteAddresses.length > 0) {
-    await sendTeeTransaction({
-      connection: session.connection,
-      feePayer,
-      instructions: delegatedQuoteAddresses.map((quoteAddress) => createUndelegatePrivateQuoteInstruction({
-        quoteAddress,
-        payer: feePayer.publicKey,
-        magicFeeVaultAddress,
-        programId: programId.toBase58(),
-      })),
-      label: "undelegate_empty_round_quotes",
-    });
-  }
-
-  await waitForBaseProgramAccount(baseConnection, roundAddress, programId);
-  await Promise.all(delegatedQuoteAddresses.map((quoteAddress) => waitForBaseProgramAccount(baseConnection, quoteAddress, programId)));
-  const nextRoundSignature = await sendWalletTransaction({
-    connection: baseConnection,
-    wallet,
-    payer: authority,
-    instructions: [createNextRoundInstruction({
-      matchAddress: input.matchAddress,
-      round: input.round,
-      authorityAddress: authority.toBase58(),
-      programId: programId.toBase58(),
-    })],
-    label: "next_round_after_skip",
-  });
-  return { walletAddress: authority.toBase58(), nextRoundSignature };
+export async function skipEmptyRoundOnchain(input: { baseRpcUrl: string; matchAddress: string; programId: string; snapshot: PublicMatchSnapshot }) {
+  if (input.snapshot.roundStatus !== "OPEN" || input.snapshot.quoteCount !== 0) throw new Error("empty_round_required");
+  return requestCrank({ operation: "skip_empty_round", baseRpcUrl: input.baseRpcUrl, programId: input.programId, matchAddress: input.matchAddress });
 }
 
-export function skipEmptyRoundOnchain(input: EmptyRoundInput) {
-  return emptyRoundOnchain(input, "skip");
+export async function resumeSkippedRoundOnchain(input: { baseRpcUrl: string; matchAddress: string; programId: string; snapshot: PublicMatchSnapshot }) {
+  if (input.snapshot.roundStatus !== "SKIPPED") throw new Error("skipped_round_required");
+  return requestCrank({ operation: "advance_round", baseRpcUrl: input.baseRpcUrl, programId: input.programId, matchAddress: input.matchAddress });
 }
 
-export function resumeSkippedRoundOnchain(input: EmptyRoundInput) {
-  return emptyRoundOnchain(input, "resume");
+export async function settleMatchOnchain(input: { rpcUrl: string; matchAddress: string; resultAddress?: string; winnerAddress: string; programId: string }) {
+  return requestCrank({ operation: "settle_match", baseRpcUrl: input.rpcUrl, programId: input.programId, matchAddress: input.matchAddress, payload: { winnerAddress: input.winnerAddress } });
 }
+
+export function createSessionSetupBundle(input: { matchAddress: string; authorityAddress: string; sessionKey?: PublicKey; programId?: string | PublicKey; expiresInSeconds?: number }) {
+  const sessionKey = input.sessionKey ?? sessionKeypairForMatch(input.matchAddress).publicKey;
+  return { sessionKey, sessionGrant: sessionGrantPda({ matchAddress: input.matchAddress, authorityAddress: input.authorityAddress, sessionKey, programId: typeof input.programId === "string" ? new PublicKey(input.programId) : input.programId }), instruction: createAuthorizeSessionInstruction({ ...input, sessionKey, expiresInSeconds: input.expiresInSeconds ?? DEFAULT_SESSION_DURATION_SECONDS }) };
+}
+
+export const createInitializeOracleInstructionForDefaultFeed = (input: { authorityAddress: string; priceFeedAddress?: string; programId?: string | PublicKey }) => createInitializeOracleInstruction({ ...input, feedId: Uint8Array.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d".match(/../g)!.map((byte) => Number.parseInt(byte, 16))) });
+
+export { escrowPda, oraclePda, resultPda, runtimePda };

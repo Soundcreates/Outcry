@@ -1,126 +1,116 @@
 import assert from "node:assert/strict";
-import { Keypair } from "@solana/web3.js";
-import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
-import { readFile } from "node:fs/promises";
-import {
-  createCreateMatchInstruction,
-  createInitializePitInstruction,
-  createJoinMatchInstruction,
-  createReleaseActiveMatchInstruction,
-  createUndelegateMatchInstruction,
-  classifyMatchOwnership,
-  matchBootstrapAddresses,
-  validateJoinAccounts,
-  validateWalletBalance,
-} from "./joinMatch";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { createDelegateRuntimeInstruction } from "./privacy";
+import outcryIdl from "./idl/outcry.json";
+import { createCreateMatchInstruction, createJoinMatchInstruction, createMigrateLegacyMatchInstruction, createReleaseActiveMatchInstruction, isLegacyMatchAccount, matchBootstrapAddresses, recoverV2MatchNonce, sessionGrantState } from "./joinMatch";
+import { runtimePda } from "./matchState";
 
+const programId = new PublicKey(outcryIdl.address);
 const match = Keypair.generate().publicKey;
 const player = Keypair.generate().publicKey;
-const programId = Keypair.generate().publicKey;
-const nodeGlobals = globalThis as { Buffer?: unknown };
-const originalBuffer = nodeGlobals.Buffer;
-nodeGlobals.Buffer = undefined;
-const instruction = createJoinMatchInstruction({
-  matchAddress: match.toBase58(),
-  playerAddress: player.toBase58(),
-  programId: programId.toBase58(),
-  seatIndex: 2,
-});
-nodeGlobals.Buffer = originalBuffer;
-
-assert.equal(instruction.programId.toBase58(), programId.toBase58());
-assert.equal(instruction.keys[0]?.pubkey.toBase58(), match.toBase58());
-assert.equal(instruction.keys[0]?.isWritable, true);
-assert.equal(instruction.keys[1]?.pubkey.toBase58(), player.toBase58());
-assert.equal(instruction.keys[1]?.isSigner, true);
-assert.deepEqual([...instruction.data], [244, 8, 47, 130, 192, 59, 179, 44, 2]);
-assert.throws(() => createJoinMatchInstruction({
-  matchAddress: match.toBase58(),
-  playerAddress: player.toBase58(),
-  programId: programId.toBase58(),
-  seatIndex: 4,
-}), /invalid_seat/);
-assert.throws(() => validateJoinAccounts(null, null, programId), /outcry_program_not_deployed/);
-assert.throws(() => validateJoinAccounts({ executable: true }, null, programId), /match_account_not_initialized/);
-assert.throws(() => validateJoinAccounts({ executable: true }, { owner: player }, programId), /match_account_program_mismatch/);
-validateJoinAccounts({ executable: true }, { owner: programId }, programId);
-validateJoinAccounts({ executable: true }, { owner: DELEGATION_PROGRAM_ID }, programId);
-assert.equal(classifyMatchOwnership(programId, programId), "base");
-assert.equal(classifyMatchOwnership(DELEGATION_PROGRAM_ID, programId), "delegated");
-assert.throws(() => classifyMatchOwnership(player, programId), /match_account_program_mismatch/);
-assert.throws(() => validateWalletBalance(0), /wallet_fee_payer_unfunded/);
-assert.throws(() => validateWalletBalance(4_999), /wallet_fee_payer_unfunded/);
-validateWalletBalance(5_000);
-assert.match(await readFile(new URL("./matchState.ts", import.meta.url), "utf8"), /LEGACY_MATCH_BYTES/);
+const join = createJoinMatchInstruction({ matchAddress: match.toBase58(), playerAddress: player.toBase58(), programId: programId.toBase58() });
+assert.equal(join.data.length, 8, "join has no seat argument");
+assert.equal(join.keys[1]?.isSigner, true);
+assert.equal(join.keys[1]?.pubkey.toBase58(), player.toBase58());
+const joinSource = await (await import("node:fs/promises")).readFile(new URL("./joinMatch.ts", import.meta.url), "utf8");
+assert.match(joinSource, /SESSION_BASE_FEE_BUFFER_LAMPORTS = 2_000_000/);
+assert.doesNotMatch(joinSource, /ensureSessionFeeFunding/);
+assert.match(joinSource, /ensureOracleInitialized/);
+assert.match(joinSource, /ensureSessionGrantOnBase/);
+assert.match(joinSource, /replaceSessionKeypairForMatch/);
 
 const bootstrap = matchBootstrapAddresses({ pitId: "wall-street-01", nonce: 1n, programId: programId.toBase58() });
-const initializePit = createInitializePitInstruction({
-  pitAddress: bootstrap.pit.toBase58(),
-  authorityAddress: player.toBase58(),
-  pitId: "wall-street-01",
-  capacity: 4,
-  programId: programId.toBase58(),
-});
-const createMatch = createCreateMatchInstruction({
+const expected = PublicKey.findProgramAddressSync([
+  new TextEncoder().encode("match_v2"),
+  bootstrap.pit.toBytes(),
+  Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0]),
+], programId)[0];
+assert.equal(bootstrap.match.toBase58(), expected.toBase58());
+
+const activeV2 = matchBootstrapAddresses({ pitId: "wall-street-01", nonce: 26n, programId: programId.toBase58() });
+assert.equal(recoverV2MatchNonce({
+  pitAddress: activeV2.pit,
+  activeMatchAddress: activeV2.match,
+  programId,
+  preferredNonce: 13n,
+}), 26n, "release must recover the active V2 nonce instead of trusting stale configuration");
+assert.equal(recoverV2MatchNonce({
+  pitAddress: activeV2.pit,
+  activeMatchAddress: activeV2.match,
+  programId,
+  preferredNonce: 26n,
+}), 26n);
+assert.throws(() => recoverV2MatchNonce({
+  pitAddress: activeV2.pit,
+  activeMatchAddress: Keypair.generate().publicKey,
+  programId,
+  preferredNonce: 13n,
+}), /active_v2_match_nonce_unrecoverable/);
+
+const create = createCreateMatchInstruction({
   pitAddress: bootstrap.pit.toBase58(),
   matchAddress: bootstrap.match.toBase58(),
   authorityAddress: player.toBase58(),
   nonce: 1n,
   programId: programId.toBase58(),
 });
-assert.equal(initializePit.keys[0]?.pubkey.toBase58(), bootstrap.pit.toBase58());
-assert.equal(initializePit.keys[1]?.isSigner, true);
-assert.equal(createMatch.keys[1]?.pubkey.toBase58(), bootstrap.match.toBase58());
-assert.equal(createMatch.keys[2]?.isSigner, true);
+assert.equal(create.keys[2]?.pubkey.toBase58(), runtimePda(bootstrap.match.toBase58(), programId).toBase58());
+assert.equal(create.keys[1]?.isWritable, true, "new MatchV2 account must be writable for init");
+assert.equal(create.keys[2]?.isSigner, false);
+
+const delegateRuntime = createDelegateRuntimeInstruction({
+  matchAddress: bootstrap.match,
+  payer: player,
+  validator: Keypair.generate().publicKey,
+  programId,
+});
+assert.equal(delegateRuntime.keys[0]?.pubkey.toBase58(), player.toBase58());
+assert.equal(delegateRuntime.keys[0]?.isSigner, true);
+assert.equal(delegateRuntime.keys[4]?.pubkey.toBase58(), runtimePda(bootstrap.match.toBase58(), programId).toBase58());
+assert.equal(delegateRuntime.keys[4]?.isWritable, true);
+assert.equal(delegateRuntime.data.length, 40, "runtime delegation carries only the match key");
+
 const release = createReleaseActiveMatchInstruction({
   pitAddress: bootstrap.pit.toBase58(),
   matchAddress: bootstrap.match.toBase58(),
   authorityAddress: player.toBase58(),
-  programId: programId.toBase58(),
-});
-assert.equal(release.keys[0]?.pubkey.toBase58(), bootstrap.pit.toBase58());
-assert.equal(release.keys[0]?.isWritable, true);
-assert.equal(release.keys[1]?.pubkey.toBase58(), bootstrap.match.toBase58());
-assert.equal(release.keys[2]?.pubkey.toBase58(), player.toBase58());
-assert.equal(release.keys[2]?.isSigner, true);
-assert.equal(release.data[8], 0);
-const forcedRelease = createReleaseActiveMatchInstruction({
-  pitAddress: bootstrap.pit.toBase58(),
-  matchAddress: bootstrap.match.toBase58(),
-  authorityAddress: player.toBase58(),
+  nonce: 1n,
   programId: programId.toBase58(),
   force: true,
 });
-assert.equal(forcedRelease.data[8], 1);
-const magicFeeVault = Keypair.generate().publicKey;
-const undelegate = createUndelegateMatchInstruction({
+assert.equal(release.data.length, 17, "release encodes nonce and force");
+assert.equal(release.data[16], 1);
+
+const migrate = createMigrateLegacyMatchInstruction({
+  pitAddress: bootstrap.pit.toBase58(),
+  legacyMatchAddress: match.toBase58(),
   matchAddress: bootstrap.match.toBase58(),
-  payer: player,
   authorityAddress: player.toBase58(),
-  magicFeeVaultAddress: magicFeeVault.toBase58(),
+  nonce: 1n,
   programId: programId.toBase58(),
 });
-assert.equal(undelegate.keys[0]?.pubkey.toBase58(), player.toBase58());
-assert.equal(undelegate.keys[0]?.isSigner, true);
-assert.equal(undelegate.keys[1]?.pubkey.toBase58(), bootstrap.match.toBase58());
-assert.equal(undelegate.keys[2]?.pubkey.toBase58(), magicFeeVault.toBase58());
-assert.equal(undelegate.keys[2]?.isWritable, true);
-assert.equal(undelegate.keys[3]?.pubkey.toBase58(), player.toBase58());
-assert.equal(undelegate.keys[3]?.isSigner, true);
-assert.throws(() => createInitializePitInstruction({
-  pitAddress: bootstrap.pit.toBase58(), authorityAddress: player.toBase58(), pitId: "wall-street-01", capacity: 5, programId: programId.toBase58(),
-}), /invalid_pit_capacity/);
-const source = await readFile(new URL("./joinMatch.ts", import.meta.url), "utf8");
-assert.match(source, /sigVerify: false/);
-assert.match(source, /replaceRecentBlockhash: true/);
-assert.match(source, /response\.status === 429/);
-assert.match(source, /retry-after/);
-assert.match(source, /signTransaction/);
-assert.match(source, /wallet_transaction_expired_retry/);
-assert.match(source, /getBalance\(player/);
-assert.match(source, /alreadyJoined/);
-assert.match(source, /seatIndex: existingSeat/);
-assert.match(source, /match_finished_release_required/);
-assert.match(source, /join_match_simulation_failed:/);
+assert.equal(migrate.data.length, 16, "legacy migration encodes the nonce");
+assert.equal(migrate.keys[1]?.isWritable, false);
+assert.equal(migrate.keys[2]?.isWritable, true);
+assert.equal(migrate.keys[3]?.pubkey.toBase58(), runtimePda(bootstrap.match.toBase58(), programId).toBase58());
 
-console.log("wallet adapter: join and authority-bootstrap instruction metas, PDAs, discriminators, and bounds pass");
+const legacyMatch = new Uint8Array(372);
+legacyMatch.set([236, 63, 169, 38, 15, 56, 196, 162]);
+assert.equal(isLegacyMatchAccount(legacyMatch), true);
+assert.equal(isLegacyMatchAccount(new Uint8Array(205)), false);
+
+assert.throws(() => matchBootstrapAddresses({ pitId: "", nonce: 1n, programId: programId.toBase58() }), /invalid_pit_id/);
+
+const session = Keypair.generate();
+const grantData = new Uint8Array(115);
+grantData.set(Uint8Array.from(outcryIdl.accounts.find((account) => account.name === "SessionGrant")?.discriminator ?? []));
+grantData.set(match.toBytes(), 8);
+grantData.set(player.toBytes(), 40);
+grantData.set(session.publicKey.toBytes(), 72);
+new DataView(grantData.buffer).setBigInt64(104, 100n, true);
+assert.equal(sessionGrantState(null, programId, { matchAddress: match, authority: player, sessionKey: session.publicKey }, 0), "missing");
+assert.equal(sessionGrantState({ owner: programId, data: grantData }, programId, { matchAddress: match, authority: player, sessionKey: session.publicKey }, 0), "valid");
+assert.equal(sessionGrantState({ owner: programId, data: grantData }, programId, { matchAddress: match, authority: player, sessionKey: session.publicKey }, 100), "expired");
+grantData[113] = 1;
+assert.equal(sessionGrantState({ owner: programId, data: grantData }, programId, { matchAddress: match, authority: player, sessionKey: session.publicKey }, 0), "invalid");
+console.log("join builders: V2 match seed, runtime creation, and seat-free join verified");

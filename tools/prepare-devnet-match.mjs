@@ -12,10 +12,11 @@ pitId.set(new TextEncoder().encode(pitLabel));
 const nonceBytes = new Uint8Array(8);
 new DataView(nonceBytes.buffer).setBigUint64(0, nonce, true);
 const [pit] = PublicKey.findProgramAddressSync([Buffer.from("pit"), pitId], programId);
-const [match] = PublicKey.findProgramAddressSync([Buffer.from("match"), pit.toBytes(), nonceBytes], programId);
+const [match] = PublicKey.findProgramAddressSync([Buffer.from("match_v2"), pit.toBytes(), nonceBytes], programId);
+const [runtime] = PublicKey.findProgramAddressSync([Buffer.from("runtime"), match.toBytes()], programId);
 
 const connection = new Connection(rpcUrl, "confirmed");
-const accounts = { pit, match };
+const accounts = { pit, match, runtime };
 const entries = await Promise.all(Object.entries(accounts).map(async ([name, address]) => {
   const info = await connection.getAccountInfo(address, "confirmed");
   return [name, { address: address.toBase58(), exists: Boolean(info), owner: info?.owner.toBase58() ?? null, dataLength: info?.data.length ?? 0 }];
@@ -29,7 +30,7 @@ console.log(JSON.stringify({
   requiredOperations: [
     "initialize_pit",
     "create_match",
-    "join_match (each seated wallet, in the browser)",
+    "join_match (each wallet, in setup)",
   ],
   instruction: "BOOTSTRAP_DRY_RUN_ONLY: this creates no accounts; players join separately with their own wallets",
 }, null, 2));

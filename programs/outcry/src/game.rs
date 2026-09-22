@@ -8,7 +8,9 @@ pub const DEFAULT_MAX_DEVIATION_BPS: u64 = 500;
 // The local harness snapshots one immutable oracle account before a long run.
 pub const DEFAULT_ORACLE_MAX_AGE_SECONDS: i64 = 86_400;
 #[cfg(not(feature = "localnet"))]
-pub const DEFAULT_ORACLE_MAX_AGE_SECONDS: i64 = 30;
+// Sponsored Pyth shard-0 feeds have a 55-second default heartbeat. Allow one
+// additional Solana/relayer propagation window without accepting old prices.
+pub const DEFAULT_ORACLE_MAX_AGE_SECONDS: i64 = 90;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuoteCandidate {
@@ -35,8 +37,8 @@ pub struct Fill {
 pub enum SessionAction {
     OpenRfq = 1,
     SubmitQuote = 2,
-    ResolveRound = 4,
-    NextRound = 8,
+    StartMatch = 4,
+    SetupPrivateState = 8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +81,10 @@ pub fn validate_oracle(
     if price_e6 <= 0 || published_at > now || max_age_seconds < 0 {
         return Err(GameError::OracleInvalid);
     }
-    if now.saturating_sub(published_at) > max_age_seconds {
+    let age = now
+        .checked_sub(published_at)
+        .ok_or(GameError::ArithmeticOverflow)?;
+    if age > max_age_seconds {
         return Err(GameError::OracleStale);
     }
     Ok(())
@@ -321,6 +326,27 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "localnet"))]
+    #[test]
+    fn production_oracle_age_allows_the_push_feed_heartbeat() {
+        assert!(validate_oracle(
+            105_000_000,
+            1_000,
+            1_000 + DEFAULT_ORACLE_MAX_AGE_SECONDS,
+            DEFAULT_ORACLE_MAX_AGE_SECONDS,
+        )
+        .is_ok());
+        assert_eq!(
+            validate_oracle(
+                105_000_000,
+                1_000,
+                1_001 + DEFAULT_ORACLE_MAX_AGE_SECONDS,
+                DEFAULT_ORACLE_MAX_AGE_SECONDS,
+            ),
+            Err(GameError::OracleStale)
+        );
+    }
+
     #[test]
     fn inventory_zero_sum_invariant_holds_for_1000_fills() {
         for index in 0..1000u64 {
@@ -358,12 +384,13 @@ mod tests {
             let mut inventories = [inventory(); 4];
             for round_index in 0..8usize {
                 let taker_index = round_index % players.len();
-                let side = if (match_index + round_index as u64) % 2 == 0 {
+                let side = if (match_index + round_index as u64).is_multiple_of(2) {
                     BUY
                 } else {
                     SELL
                 };
-                let quantity = ALLOWED_LOTS[(match_index as usize + round_index) % ALLOWED_LOTS.len()];
+                let quantity =
+                    ALLOWED_LOTS[(match_index as usize + round_index) % ALLOWED_LOTS.len()];
                 let oracle_price = 100_000_000 + match_index as i64 * 1_000;
                 let quotes: Vec<_> = players
                     .iter()
@@ -380,7 +407,10 @@ mod tests {
                     })
                     .collect();
                 let winner = select_winner(side, &quotes).unwrap();
-                let dealer_index = players.iter().position(|player| *player == winner.dealer).unwrap();
+                let dealer_index = players
+                    .iter()
+                    .position(|player| *player == winner.dealer)
+                    .unwrap();
                 let (taker, dealer) = if taker_index < dealer_index {
                     let (before, after) = inventories.split_at_mut(dealer_index);
                     (&mut before[taker_index], &mut after[0])
@@ -400,7 +430,10 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(
-                    inventories.iter().map(|value| value.sol_position_lots).sum::<i64>(),
+                    inventories
+                        .iter()
+                        .map(|value| value.sol_position_lots)
+                        .sum::<i64>(),
                     0
                 );
                 assert_eq!(
@@ -433,7 +466,7 @@ mod tests {
             validate_session(grant, match_key, authority, 99, SessionAction::SubmitQuote).is_ok()
         );
         assert_eq!(
-            validate_session(grant, match_key, authority, 99, SessionAction::NextRound),
+            validate_session(grant, match_key, authority, 99, SessionAction::StartMatch),
             Err(GameError::ActionNotAllowed)
         );
         assert_eq!(

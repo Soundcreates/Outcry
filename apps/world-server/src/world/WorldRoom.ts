@@ -14,6 +14,7 @@ import {
   type SeatActionResult,
   type SeatLease,
 } from "./seat-leasing";
+import { createSeatAssignmentStore, type SeatAssignmentStore } from "./seat-assignments";
 
 const TICK_RATE_HZ = 20;
 const ACTIVE_MATCH_REFRESH_MS = 5_000;
@@ -24,6 +25,7 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
   // ponytail: process-local presence count; use shared storage when the server is horizontally scaled.
   private static readonly activeSessions = new Set<string>();
   private static readonly seatedSessions = new Map<string, { pitId: string; seatIndex: number }>();
+  private static seatAssignmentMode: "memory" | "redis" = "memory";
   private static readonly knownWorldIds = new Set([
     "wall-street",
     "tokyo-night",
@@ -42,7 +44,9 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
   ]);
   private geometry!: WorldGeometry;
   private seating!: SeatLeaseManager;
+  private seatAssignments!: SeatAssignmentStore;
   private membershipReader?: MatchMembershipReader;
+  private readonly sessionIdentities = new Map<string, { matchAddress: string; walletAddress: string }>();
   private activeMatchAddress = "";
   private activeMatchReadAt = 0;
   private activeMatchRefresh?: Promise<void>;
@@ -61,21 +65,28 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
     this.geometry = await loadWorldGeometry(worldId);
     this.seating = new SeatLeaseManager(this.geometry.pits, this.geometry.seats);
     const env = readServerEnv();
-    this.activeMatchAddress = env.OUTCRY_MATCH_ADDRESS ?? "";
+    if (process.env.NODE_ENV === "production" && !env.OUTCRY_REDIS_URL) {
+      throw new Error("redis_required_in_production");
+    }
+    this.seatAssignments = createSeatAssignmentStore(env.OUTCRY_REDIS_URL);
+    WorldRoom.seatAssignmentMode = env.OUTCRY_REDIS_URL ? "redis" : "memory";
+    // The pit PDA is authoritative. A configured address is only used by the
+    // browser's bootstrap flow; retaining it here after a release resurrects
+    // stale matches for newly connected players.
+    this.activeMatchAddress = "";
     this.membershipReader = createMatchMembershipReader({
       rpcUrl: env.OUTCRY_BASE_RPC,
       programId: env.OUTCRY_PROGRAM_ID,
     });
-    const onchainMatch = await this.membershipReader?.readActiveMatch("wall-street-01");
-    if (onchainMatch) this.activeMatchAddress = onchainMatch;
     this.setState(new WorldState());
+    await this.refreshActiveMatch(true);
     this.initializePitState();
     this.onMessage("chat", (client, payload) => this.handleChat(client, payload));
     this.onMessage("interact", (client, payload) => void this.interact(client, payload));
     this.onMessage("beginConfirm", (client) => this.beginConfirmation(client));
     this.onMessage("confirmSeat", (client, payload) => void this.confirmSeat(client, payload));
     this.onMessage("reconcileSeat", (client, payload) => void this.reconcileSeat(client, payload));
-    this.onMessage("releaseSeat", (client) => this.releaseSeat(client));
+    this.onMessage("releaseSeat", (client) => void this.releaseSeat(client));
     this.setFixedTimestep((context) => this.simulate(context), TICK_RATE_HZ);
   }
 
@@ -128,6 +139,7 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
 
   private simulate(context: StepContext) {
     this.expireLeases();
+    void this.refreshActiveMatch();
     for (const [sessionId, player] of this.state.players) {
       const input = this.movementInputs.get(sessionId).next();
       if (input) simulatePlayer(player, input, this.geometry, context.dtMs);
@@ -142,6 +154,7 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
     this.lastChatAt.delete(sessionId);
     WorldRoom.activeSessions.delete(sessionId);
     WorldRoom.seatedSessions.delete(sessionId);
+    void this.clearDurableSeatAssignment(sessionId);
   }
 
   static onlineCount() {
@@ -154,6 +167,10 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
 
   static isKnownPitId(pitId: string) {
     return WorldRoom.knownPitIds.has(pitId);
+  }
+
+  static storageMode() {
+    return WorldRoom.seatAssignmentMode;
   }
 
   static canJoinMedia(sessionId: string, pitId: string) {
@@ -212,23 +229,42 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
     this.sendSeatResult(client, result);
   }
 
-  private async refreshActiveMatch() {
-    if (!this.membershipReader || Date.now() - this.activeMatchReadAt < ACTIVE_MATCH_REFRESH_MS) return;
+  private async refreshActiveMatch(force = false) {
+    if (!this.membershipReader || (!force && Date.now() - this.activeMatchReadAt < ACTIVE_MATCH_REFRESH_MS)) return;
     if (this.activeMatchRefresh) return this.activeMatchRefresh;
 
     this.activeMatchRefresh = this.membershipReader.readActiveMatch("wall-street-01")
       .then((matchAddress) => {
         this.activeMatchReadAt = Date.now();
-        if (!matchAddress || matchAddress === this.activeMatchAddress) return;
-        this.activeMatchAddress = matchAddress;
-        const pit = this.state.pits.get("wall-street-01");
-        if (pit) pit.activeMatchId = matchAddress;
+        this.applyActiveMatch(matchAddress);
       })
-      .catch(() => undefined)
+      .catch(() => {
+        this.activeMatchReadAt = Date.now();
+        // Fail closed on a chain outage. The UI must not retain a released
+        // match merely because the confirmation read failed.
+        this.applyActiveMatch(undefined);
+      })
       .finally(() => {
         this.activeMatchRefresh = undefined;
       });
     return this.activeMatchRefresh;
+  }
+
+  private applyActiveMatch(matchAddress: string | undefined) {
+    const next = matchAddress ?? "";
+    if (next === this.activeMatchAddress) return;
+    this.activeMatchAddress = next;
+    const pit = this.state.pits.get("wall-street-01");
+    if (pit) pit.activeMatchId = next;
+
+    // Physical seats may remain occupied, but media and reconnection identity
+    // must be re-authorized for the current onchain match.
+    for (const [sessionId, identity] of this.sessionIdentities) {
+      if (identity.matchAddress === next) continue;
+      this.sessionIdentities.delete(sessionId);
+      WorldRoom.seatedSessions.delete(sessionId);
+      void this.seatAssignments.delete(identity.matchAddress, identity.walletAddress);
+    }
   }
 
   private async confirmSeat(client: Client, payload: unknown) {
@@ -238,7 +274,7 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
       return;
     }
     if (!confirmation.confirmed) {
-      this.releaseSeat(client);
+      await this.releaseSeat(client);
       return;
     }
 
@@ -263,7 +299,6 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
     const isMember = await this.membershipReader.isConfirmed({
       matchAddress: confirmation.matchAddress,
       walletAddress: confirmation.walletAddress,
-      seatIndex: seat.seatIndex,
     });
     if (!isMember) {
       this.releaseSeat(client);
@@ -272,16 +307,26 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
     }
 
     if (matchChanged) {
-      this.activeMatchAddress = confirmation.matchAddress;
-      const pitState = this.state.pits.get("wall-street-01");
-      if (pitState) pitState.activeMatchId = confirmation.matchAddress;
+      this.applyActiveMatch(confirmation.matchAddress);
     }
 
     if (seat.status === "RESERVED") this.seating.beginConfirmation(client.sessionId);
     const result = this.seating.confirm(client.sessionId);
     if (result.accepted) {
       const player = this.state.players.get(client.sessionId);
-      if (player) this.seatPlayer(client.sessionId, player, result.seat);
+      if (player) {
+        this.sessionIdentities.set(client.sessionId, {
+          matchAddress: confirmation.matchAddress,
+          walletAddress: confirmation.walletAddress,
+        });
+        void this.seatAssignments.set({
+          matchAddress: confirmation.matchAddress,
+          walletAddress: confirmation.walletAddress,
+          pitId: result.seat.pitId,
+          seatIndex: result.seat.seatIndex,
+        });
+        this.seatPlayer(client.sessionId, player, result.seat);
+      }
     }
     this.sendSeatResult(client, result);
   }
@@ -310,9 +355,7 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
       return;
     }
     if (identity.matchAddress !== this.activeMatchAddress) {
-      this.activeMatchAddress = identity.matchAddress;
-      const pitState = this.state.pits.get(pit.pitId);
-      if (pitState) pitState.activeMatchId = identity.matchAddress;
+      this.applyActiveMatch(identity.matchAddress);
     }
     if (canRebindPendingSeat && currentSeat) {
       const releasedSeats = this.seating.releaseSession(client.sessionId);
@@ -320,20 +363,21 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
       this.clearSeatPlayer(player, currentSeat, client.sessionId);
     }
 
-    const seatIndex = (await Promise.all(
-      Array.from({ length: pit.capacity }, (_, index) => this.membershipReader!.isConfirmed({
-        matchAddress: identity.matchAddress,
-        walletAddress: identity.walletAddress,
-        seatIndex: index,
-      }).then((confirmed) => confirmed ? index : undefined)),
-    )).find((index): index is number => index !== undefined);
-    // Reconciliation is best-effort on world entry. A wallet that has not
-    // joined this Match yet has no seat to restore; it can still walk to a
-    // free seat and use the explicit wallet-join flow.
-    if (seatIndex === undefined) return;
+    const isMember = await this.membershipReader.isConfirmed({
+      matchAddress: identity.matchAddress,
+      walletAddress: identity.walletAddress,
+    });
+    if (!isMember) return;
+    const assignment = await this.seatAssignments.get(identity.matchAddress, identity.walletAddress);
+    // A wallet can be a Match member without having a physical world seat.
+    // Reconciliation restores only the separately persisted world assignment.
+    if (!assignment || assignment.pitId !== pit.pitId) return;
 
-    const result = this.seating.restoreConfirmed(client.sessionId, pit.pitId, seatIndex);
-    if (result.accepted) this.seatPlayer(client.sessionId, player, result.seat);
+    const result = this.seating.restoreConfirmed(client.sessionId, pit.pitId, assignment.seatIndex);
+    if (result.accepted) {
+      this.sessionIdentities.set(client.sessionId, identity);
+      this.seatPlayer(client.sessionId, player, result.seat);
+    }
     this.sendSeatResult(client, result);
   }
 
@@ -343,7 +387,7 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
     this.sendSeatResult(client, result);
   }
 
-  private releaseSeat(client: Client) {
+  private async releaseSeat(client: Client) {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
     const releasedSeats = this.seating.releaseSession(client.sessionId);
@@ -351,7 +395,14 @@ export class WorldRoom extends Room<{ state: WorldState; input: WorldMoveInput }
       this.syncSeat(this.seating.get(released.pitId, released.seatIndex));
     }
     this.clearSeatPlayer(player, releasedSeats[0], client.sessionId);
+    await this.clearDurableSeatAssignment(client.sessionId);
     this.sendSeatResult(client, { accepted: true, action: "released" });
+  }
+
+  private async clearDurableSeatAssignment(sessionId: string) {
+    const identity = this.sessionIdentities.get(sessionId);
+    this.sessionIdentities.delete(sessionId);
+    if (identity) await this.seatAssignments.delete(identity.matchAddress, identity.walletAddress);
   }
 
   private seatPlayer(sessionId: string, player: PlayerState, seat: SeatLease) {

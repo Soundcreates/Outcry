@@ -16,7 +16,7 @@ const pitLabel = arg("--pit-id") || "wall-street-01";
 const nonceText = arg("--nonce") || "1";
 const capacityText = arg("--capacity") || "4";
 const authorityText = arg("--authority") || process.env.OUTCRY_AUTHORITY;
-const configuredMatch = process.env.OUTCRY_MATCH_ADDRESS;
+const configuredMatch = process.argv.includes("--ignore-configured-match") ? undefined : process.env.OUTCRY_MATCH_ADDRESS;
 
 if (!authorityText) throw new Error("provide --authority=<public-key>; only public keys are accepted");
 const authority = new PublicKey(authorityText);
@@ -49,11 +49,12 @@ const instruction = (name, accounts, args = []) => new TransactionInstruction({
 });
 
 const [pit] = PublicKey.findProgramAddressSync([Buffer.from("pit"), pitId], programId);
-const [match] = PublicKey.findProgramAddressSync([Buffer.from("match"), pit.toBytes(), u64(nonce)], programId);
+const [match] = PublicKey.findProgramAddressSync([Buffer.from("match_v2"), pit.toBytes(), u64(nonce)], programId);
+const [runtime] = PublicKey.findProgramAddressSync([Buffer.from("runtime"), match.toBytes()], programId);
 if (configuredMatch && !new PublicKey(configuredMatch).equals(match)) throw new Error("derived match does not equal OUTCRY_MATCH_ADDRESS");
 
 const connection = new Connection(rpcUrl, "confirmed");
-const accounts = { pit, match };
+const accounts = { pit, match, runtime };
 const accountEntries = await Promise.all(Object.entries(accounts).map(async ([name, address]) => {
   const info = await connection.getAccountInfo(address, "confirmed");
   return [name, { address: address.toBase58(), exists: Boolean(info), owner: info?.owner.toBase58() ?? null, dataLength: info?.data.length ?? 0 }];
@@ -66,8 +67,11 @@ const transaction = new Transaction().add(
     meta(pit, true), meta(authority, true, true), meta(SystemProgram.programId),
   ], [Buffer.from(pitId), u8(capacity)]),
   instruction("create_match", [
-    meta(pit, true), meta(match, true), meta(authority, true, true), meta(SystemProgram.programId),
+    meta(pit, true), meta(match, true), meta(runtime, true), meta(authority, true, true), meta(SystemProgram.programId),
   ], [u64(nonce)]),
+  instruction("join_match", [
+    meta(match, true), meta(authority, false, true),
+  ]),
 );
 const latest = await connection.getLatestBlockhash("confirmed");
 transaction.feePayer = authority;
@@ -101,18 +105,19 @@ const output = {
   pitId: pitLabel,
   capacity,
   nonce: nonce.toString(),
+  ignoresConfiguredMatch: configuredMatch === undefined,
   accounts: Object.fromEntries(accountEntries),
-  instructionNames: ["initialize_pit", "create_match"],
+  instructionNames: ["initialize_pit", "create_match", "join_match"],
   requiredSigners: [authority.toBase58()],
   simulation: { ok: simulation.err === null, error: simulation.err, logs: simulation.logs ?? [] },
   unsignedTransactionBase64: transactionBase64,
-  instruction: "UNSIGNED_ONLY: sign and submit this bootstrap with the authority wallet only after simulation succeeds; seated players join separately in the browser",
+  instruction: "UNSIGNED_ONLY: this simulates V2 setup but never signs or submits a transaction",
 };
 console.log(JSON.stringify(output, null, 2));
 if (simulation.err !== null) {
   const logs = Array.isArray(simulation.logs) ? simulation.logs.join("\n") : "";
   const staleInterface = logs.includes("InstructionFallbackNotFound") || logs.includes("Fallback functions are not supported");
   throw new Error(staleInterface
-    ? "program_interface_stale: deployed program does not support the current initialize_pit instruction; deploy the current program build before bootstrapping a match"
+    ? "program_interface_stale: deployed program does not support the V2 match setup; deploy the current program build before bootstrapping a match"
     : "bootstrap_simulation_failed: inspect simulation.logs; no transaction was signed or submitted");
 }

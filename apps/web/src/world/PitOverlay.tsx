@@ -7,10 +7,10 @@ import {
   Track,
   type DisconnectReason,
 } from "livekit-client";
-import { bootstrapMatchOnchain, classifyMatchOwnership, connectedWalletAddress, joinMatchOnchain, readActivePitMatchOnchain, releaseActiveMatchOnchain, restoreDelegatedMatchOnchain, type MatchOwnership } from "../chain/joinMatch";
+import { bootstrapMatchOnchain, classifyMatchOwnership, connectedWalletAddress, joinMatchOnchain, migrateLegacyMatchOnchain, readActivePitMatchOnchain, releaseActiveMatchOnchain, renewSessionOnchain, type MatchOwnership } from "../chain/joinMatch";
 import { baseRpcConfigurationMessage, browserBaseRpc, createBaseRpcConnection } from "../chain/baseRpc";
-import { openRfqOnchain, prepareRfqRoundOnchain, resolveRoundOnchain, resumeSkippedRoundOnchain, settleMatchOnchain, skipEmptyRoundOnchain, startMatchOnchain } from "../chain/matchActions";
-import { loadRuntimeMatchState, type PublicMatchSnapshot } from "../chain/matchState";
+import { openRfqOnchain, resolveRoundOnchain, RfqSubmissionError, resumeSkippedRoundOnchain, settleMatchOnchain, skipEmptyRoundOnchain, startMatchOnchain } from "../chain/matchActions";
+import { currentRoundTaker, loadRuntimeMatchState, type PublicMatchSnapshot } from "../chain/matchState";
 import MatchHud from "../match/MatchHud";
 import PrivateInventoryPanel from "../match/PrivateInventoryPanel";
 import PrivateQuotePanel from "../match/PrivateQuotePanel";
@@ -79,11 +79,23 @@ function isRateLimitError(reason: unknown) {
 
 function walletJoinError(reason: unknown) {
   const message = reason instanceof Error ? reason.message : "onchain_join_failed";
+  if (/HostCannotJoin|Error Number:\s*6060/.test(message)) {
+    return "The deployed Outcry program is outdated and rejects host seating. Deploy the current program build to this configured Solana cluster, then retry.";
+  }
   if (message === "wallet_fee_payer_unfunded") {
     return "This wallet has insufficient Devnet SOL to pay the join fee. Fund it from the Solana Devnet faucet, then retry wallet join.";
   }
   if (message === "wallet_already_joined_different_seat") {
     return "This wallet is already joined in a different seat. Leave that seat or use the matching seat before retrying.";
+  }
+  if (message === "legacy_match_requires_migration") {
+    return "This pit still points to a legacy V1 match. The host must migrate it or release it and create a V2 match; changing .env alone is not enough.";
+  }
+  if (message === "match_account_invalid") {
+    return "The world server advertised a match that is not a current MatchV2 account. Restart the world server, then have the host migrate or release the active V1 match.";
+  }
+  if (message === "active_v2_match_nonce_unrecoverable") {
+    return "The active V2 match nonce could not be recovered locally. No wallet approval was requested; contact the operator to recover the pit lifecycle state.";
   }
   if (message === "match_finished_release_required") {
     return "This match has finished. The host must release it and start a fresh match before a new wallet can join.";
@@ -102,17 +114,48 @@ function walletJoinError(reason: unknown) {
 
 function resolveRoundError(reason: unknown) {
   const message = reason instanceof Error ? reason.message : String(reason);
+  const code = reason instanceof RfqSubmissionError ? reason.code : message;
+  if (code === "permissionless_relayer_unreachable") {
+    return "The round relayer could not be reached. Check that the world server is running, then retry.";
+  }
+  if (code === "relayer_not_configured" || code === "relayer_keypair_invalid") {
+    return "The world server has no usable round-relayer signer. Ask the host to configure and fund its Devnet relayer.";
+  }
+  if (code === "tee_relayer_not_configured" || code === "tee_relayer_keypair_invalid" || code === "tee_relayer_must_be_distinct") {
+    return "The world server needs a separate TEE fee-payer key. Configure it, restart the server, then retry.";
+  }
+  if (code === "tee_relayer_not_delegated" || code === "tee_relayer_underfunded" || code === "tee_relayer_unavailable" || code === "tee_relayer_owner_invalid") {
+    return "The TEE fee payer is not ready. The host must run the TEE-relayer provisioning command, then retry.";
+  }
+  if (code === "relayer_simulation_failed") {
+    return "The round cannot be resolved in its current state. The host can check the world-server relayer logs for the exact failed invariant.";
+  }
+  if (code === "runtime_router_unavailable" || code === "runtime_router_invalid" || code === "runtime_route_mismatch") {
+    return "The runtime route is not ready on MagicBlock. Retry shortly; the host can inspect the crank diagnostics endpoint if it persists.";
+  }
+  if (code === "tee_relayer_route_mismatch") {
+    return "The TEE fee payer is delegated to a different validator than this match runtime. Re-provision it for this MagicBlock route.";
+  }
+  if (code === "private_state_unavailable" || code === "private_state_not_delegated") {
+    return "Resolve is blocked because one or more private quote or inventory accounts have not been delegated. Re-run that player's private-state setup.";
+  }
+  if (code === "private_state_router_unavailable" || code === "private_state_router_invalid" || code === "private_state_route_mismatch") {
+    return "Resolve is blocked because private state is not on the same MagicBlock route as the runtime. Check crank diagnostics before retrying.";
+  }
+  if (code === "relayer_confirmation_failed" || code === "relayer_rpc_failed") {
+    return `The round relayer failed during ${reason instanceof RfqSubmissionError && reason.detail ? reason.detail : "submission"}. It will not duplicate a resolved round; check crank diagnostics before retrying.`;
+  }
   if (message.startsWith("rfq_state_not_ready:")) {
     const missing = message.slice("rfq_state_not_ready:".length).split(",").filter(Boolean);
     if (missing.some((account) => account.includes("inventory"))) {
-      return "Resolve is not ready: every player must click Unlock private inventory before the host can resolve this round.";
+      return "Resolve is not ready: private inventory state is unavailable for one or more players.";
     }
     if (missing.some((account) => account.includes("quote"))) {
       return "Resolve is not ready: the dealer quote is still being prepared. Ask the dealer to retry private quote setup.";
     }
     return `Resolve is not ready: ${missing.join(", ") || "private round state is unavailable"}.`;
   }
-  if (message === "tee_auth_failed") return "TEE authorization failed. Approve the wallet message and retry resolving the round.";
+  if (message === "tee_auth_failed") return "TEE authorization failed. Retry resolving the round.";
   if (message === "skip_deadline_not_reached") return "The quote deadline has not passed yet.";
   if (message === "empty_round_required") return "A sealed quote arrived, so this round must be resolved rather than skipped.";
   if (message === "empty_round_requires_skip") return "No quotes were sealed. Wait for the deadline, then skip the empty round.";
@@ -127,25 +170,10 @@ function settlementError(reason: unknown) {
   return message || "settlement_failed";
 }
 
-async function fetchSolUsdPriceUpdates(input: { matchId: string; sessionId: string }) {
-  const response = await fetch(`${API_BASE_URL}/api/oracle/sol-usd-update`, {
-    headers: {
-      "x-outcry-match-id": input.matchId,
-      "x-outcry-session-id": input.sessionId,
-    },
-  });
-  const payload = await response.json().catch(() => ({})) as { error?: string; updates?: unknown };
-  if (!response.ok) throw new Error(payload.error ?? "pyth_price_update_unavailable");
-  if (!Array.isArray(payload.updates) || payload.updates.some((update) => typeof update !== "string")) {
-    throw new Error("pyth_price_update_invalid");
-  }
-  return payload.updates;
-}
-
 export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onChainConfirmed, onWalletJoinStarted, onMatchAddressChanged, onChainSeatConflict, onExit, role, seatIndex, sessionId }: Props) {
   const room = useMemo(() => new Room({ adaptiveStream: true, dynacast: true }), []);
   const matchConnection = useMemo(() => baseSolanaRpc ? createBaseRpcConnection(baseSolanaRpc) : undefined, []);
-  // Match/RfqRound are public metadata. Private state remains on authenticated TEE connections.
+  // MatchV2 is durable metadata; MatchRuntime and private state are live in the ER.
   const teeMatchConnection = useMemo(() => new Connection(teeSolanaRpc, { commitment: "confirmed", disableRetryOnRateLimit: true }), []);
   const [chainPhase, setChainPhase] = useState<"required" | "joining" | "awaiting_confirmation" | "confirmed" | "failed">(
     role === "PLAYER" && matchAddress && !chainConfirmed ? "required" : "confirmed",
@@ -164,11 +192,11 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
   const [resumingSkippedRound, setResumingSkippedRound] = useState(false);
   const [startingMatch, setStartingMatch] = useState(false);
   const [selectedRoundCount, setSelectedRoundCount] = useState(3);
-  const [preparingRound, setPreparingRound] = useState(false);
   const [activeMatchToRelease, setActiveMatchToRelease] = useState<string>();
+  const [legacyMatchToMigrate, setLegacyMatchToMigrate] = useState<string>();
   const [currentMatchNonce, setCurrentMatchNonce] = useState(matchNonce);
   const [releasingStaleMatch, setReleasingStaleMatch] = useState(false);
-  const [restoringMatch, setRestoringMatch] = useState(false);
+  const [migratingLegacyMatch, setMigratingLegacyMatch] = useState(false);
   const [submittingRfq, setSubmittingRfq] = useState(false);
   const [rfqProgress, setRfqProgress] = useState("");
   const [autoStartIn, setAutoStartIn] = useState<number>();
@@ -176,7 +204,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
   const startMatchInFlightRef = useRef(false);
   const autoStartAttemptedRef = useRef(false);
   const walletAddress = connectedWalletAddress();
-  const chainActionInFlight = startingMatch || preparingRound || settling || resolving || skippingRound || resumingSkippedRound || releasingStaleMatch || restoringMatch || submittingRfq || chainPhase === "joining";
+  const chainActionInFlight = startingMatch || settling || resolving || skippingRound || resumingSkippedRound || releasingStaleMatch || migratingLegacyMatch || submittingRfq || chainPhase === "joining";
 
   useEffect(() => {
     if (chainConfirmed) setChainPhase("confirmed");
@@ -199,7 +227,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
 
   const startMatch = useCallback(async (roundCount = selectedRoundCount) => {
     if (startMatchInFlightRef.current) return;
-    if (!matchAddress || !matchSnapshot?.host) throw new Error("match_host_unavailable");
+    if (!matchAddress || !matchSnapshot) throw new Error("match_state_unavailable");
     startMatchInFlightRef.current = true;
     setStartingMatch(true);
     setError("");
@@ -207,7 +235,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       await startMatchOnchain({
         rpcUrl: requireBaseSolanaRpc(),
         matchAddress,
-        hostAddress: matchSnapshot.host,
+        hostAddress: matchSnapshot.host ?? matchSnapshot.authority,
         roundCount,
         programId,
       });
@@ -219,27 +247,6 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       setStartingMatch(false);
     }
   }, [matchAddress, matchSnapshot?.host, selectedRoundCount]);
-
-  const prepareRound = useCallback(async () => {
-    if (!matchAddress || !matchSnapshot?.taker) throw new Error("round_taker_unavailable");
-    if (preparingRound) return;
-    setPreparingRound(true);
-    setError("");
-    try {
-      await prepareRfqRoundOnchain({
-        rpcUrl: requireBaseSolanaRpc(),
-        matchAddress,
-        takerAddress: matchSnapshot.taker,
-        round: matchSnapshot.currentRound,
-        programId,
-      });
-      setMatchRevision((value) => value + 1);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "prepare_rfq_round_failed");
-    } finally {
-      setPreparingRound(false);
-    }
-  }, [matchAddress, matchSnapshot?.currentRound, matchSnapshot?.taker, preparingRound]);
 
   useEffect(() => {
     let active = true;
@@ -398,6 +405,7 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
   const fullMatch = matchSnapshot?.status === "WAITING" &&
     matchSnapshot.playerCount >= matchSnapshot.capacity;
   const localIsHost = Boolean(walletAddress && matchSnapshot?.host === walletAddress);
+  const currentTaker = matchSnapshot ? currentRoundTaker(matchSnapshot) : undefined;
 
   useEffect(() => {
     if (!fullMatch) {
@@ -451,7 +459,13 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     try {
       let result;
       try {
-        result = await joinMatchOnchain({ matchAddress, seatIndex, rpcUrl: requireBaseSolanaRpc(), programId });
+        result = await joinMatchOnchain({
+          matchAddress,
+          rpcUrl: requireBaseSolanaRpc(),
+          programId,
+          teeRpcUrl: teeSolanaRpc,
+          onWalletApprovalRequested: () => setError("Setup simulation passed. Approve the one-time match/session setup in your wallet."),
+        });
       } catch (reason) {
         if (!(reason instanceof Error) || reason.message !== "match_account_not_initialized") throw reason;
         setError("Match is not initialized. Simulating first-player setup before wallet approval…");
@@ -464,14 +478,15 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
           expectedMatchAddress: matchAddress,
           onWalletApprovalRequested: () => setError("Setup simulation passed. Approve the Match account transaction in your wallet."),
         });
-        result = await joinMatchOnchain({ matchAddress, seatIndex, rpcUrl: requireBaseSolanaRpc(), programId });
+        result = await joinMatchOnchain({
+          matchAddress,
+          rpcUrl: requireBaseSolanaRpc(),
+          programId,
+          teeRpcUrl: teeSolanaRpc,
+          onWalletApprovalRequested: () => setError("Setup simulation passed. Approve the one-time match/session setup in your wallet."),
+        });
       }
-      if ("alreadyJoined" in result && result.seatIndex !== seatIndex) {
-        setError(`Wallet is already assigned to seat ${result.seatIndex}. Restoring that seat…`);
-        onChainSeatConflict?.({ matchAddress, walletAddress: result.walletAddress });
-      } else {
-        onChainConfirmed({ matchAddress, walletAddress: result.walletAddress });
-      }
+      onChainConfirmed({ matchAddress, walletAddress: result.walletAddress });
       setChainPhase("awaiting_confirmation");
     } catch (reason) {
       if (reason instanceof Error && reason.message.startsWith("pit_has_active_match:")) {
@@ -479,6 +494,10 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       }
       if (reason instanceof Error && reason.message === "match_finished_release_required") {
         setActiveMatchToRelease(matchAddress);
+      }
+      if (reason instanceof Error && reason.message === "legacy_match_requires_migration") {
+        setActiveMatchToRelease(matchAddress);
+        setLegacyMatchToMigrate(matchAddress);
       }
       setChainPhase("failed");
       setError(walletJoinError(reason));
@@ -495,61 +514,71 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
       const result = await releaseActiveMatchOnchain({
         pitId: matchId,
         activeMatchAddress: requestedMatchAddress,
+        preferredMatchNonce: currentMatchNonce,
         rpcUrl: requireBaseSolanaRpc(),
-        teeRpcUrl: teeSolanaRpc,
         programId,
         onWalletApprovalRequested: () => setError("Release simulation passed. Approve the host cleanup transaction in your wallet."),
       });
       setCurrentMatchNonce(result.matchNonce);
       setActiveMatchToRelease(undefined);
+      setLegacyMatchToMigrate(undefined);
       onMatchAddressChanged?.(result.matchAddress);
       setChainPhase("required");
       setError("Fresh match created. Join it with your wallet to continue.");
     } catch (reason) {
       setChainPhase("failed");
-      setError(reason instanceof Error ? reason.message : "active_match_release_failed");
+      setError(walletJoinError(reason));
     } finally {
       setReleasingStaleMatch(false);
     }
   };
 
-  const restoreMatchToBase = async () => {
-    if (!matchAddress || restoringMatch) return;
-    setRestoringMatch(true);
-    setError("Preparing legacy-match recovery…");
+  const migrateLegacyMatch = async () => {
+    if (!legacyMatchToMigrate || migratingLegacyMatch) return;
+    setMigratingLegacyMatch(true);
+    setChainPhase("joining");
+    setError("Simulating legacy-match migration…");
     try {
-      await restoreDelegatedMatchOnchain({
-        matchAddress,
+      const result = await migrateLegacyMatchOnchain({
+        pitId: matchId,
+        legacyMatchAddress: legacyMatchToMigrate,
         rpcUrl: requireBaseSolanaRpc(),
-        teeRpcUrl: teeSolanaRpc,
         programId,
-        onWalletApprovalRequested: () => setError("Recovery is ready. Approve the host transaction in your wallet."),
+        onWalletApprovalRequested: () => setError("Migration simulation passed. Approve the host migration transaction in your wallet."),
       });
-      setError("Match restored to Base. You can now submit the RFQ.");
-      setMatchRevision((value) => value + 1);
+      setCurrentMatchNonce(result.matchNonce);
+      setActiveMatchToRelease(undefined);
+      setLegacyMatchToMigrate(undefined);
+      onMatchAddressChanged?.(result.matchAddress);
+      setChainPhase("required");
+      setError("Legacy match migrated to V2. Join the new match with your wallet.");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "match_restore_failed");
+      setChainPhase("failed");
+      setError(walletJoinError(reason));
     } finally {
-      setRestoringMatch(false);
+      setMigratingLegacyMatch(false);
     }
   };
 
   const submitIntent = async (intent: Parameters<typeof openRfqOnchain>[0]["intent"]) => {
-    if (!matchAddress || !matchSnapshot?.host) throw new Error("match_host_unavailable");
+    if (!matchAddress || !matchSnapshot) throw new Error("match_state_unavailable");
+    const takerAddress = currentRoundTaker(matchSnapshot);
+    if (matchSnapshot.roundStatus !== "PREPARED" || !takerAddress || takerAddress !== walletAddress) {
+      throw new Error("not_current_taker");
+    }
     if (submittingRfq) return;
     setSubmittingRfq(true);
-    setRfqProgress("Fetching a verified SOL/USD price update…");
+    setRfqProgress("Submitting the RFQ with your authorized session signer…");
     try {
-      const priceUpdates = await fetchSolUsdPriceUpdates({ matchId, sessionId });
       await openRfqOnchain({
         baseRpcUrl: requireBaseSolanaRpc(),
         teeRpcUrl: teeSolanaRpc,
         matchAddress,
-        hostAddress: matchSnapshot.host,
+        matchId,
+        sessionId,
+        authorityAddress: takerAddress,
         programId,
-        round: matchSnapshot.currentRound,
         intent,
-        priceUpdates,
         onProgress: setRfqProgress,
       });
       setMatchRevision((value) => value + 1);
@@ -560,6 +589,26 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     } finally {
       setSubmittingRfq(false);
       setRfqProgress("");
+    }
+  };
+
+  const renewSession = async () => {
+    if (!matchAddress || !walletAddress) throw new Error("session_renewal_unavailable");
+    setSubmittingRfq(true);
+    setRfqProgress("Simulating session renewal before wallet approval…");
+    try {
+      await renewSessionOnchain({
+        rpcUrl: requireBaseSolanaRpc(),
+        matchAddress,
+        authorityAddress: walletAddress,
+        programId,
+        onWalletApprovalRequested: () => setRfqProgress("Approve the one-time session renewal in your wallet…"),
+      });
+      setRfqProgress("Session renewed for 24 hours.");
+      setMatchRevision((value) => value + 1);
+    } finally {
+      setSubmittingRfq(false);
+      window.setTimeout(() => setRfqProgress(""), 2_000);
     }
   };
 
@@ -587,19 +636,12 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     setResolving(true);
     setError("");
     try {
-      if (!matchAddress || !matchSnapshot?.host) throw new Error("match_host_unavailable");
+      if (!matchAddress || !matchSnapshot) throw new Error("match_state_unavailable");
       const resolvedRound = matchSnapshot.currentRound;
-      const priceUpdates = resolvedRound + 1 >= matchSnapshot.roundCount
-        ? await fetchSolUsdPriceUpdates({ matchId, sessionId })
-        : undefined;
       await resolveRoundOnchain({
         baseRpcUrl: requireBaseSolanaRpc(),
-        teeRpcUrl: teeSolanaRpc,
         matchAddress,
-        round: resolvedRound,
-        resolverAddress: matchSnapshot.host,
         snapshot: matchSnapshot,
-        priceUpdates,
         programId,
       });
       setMatchRevision((value) => value + 1);
@@ -620,13 +662,10 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     setSkippingRound(true);
     setError("");
     try {
-      if (!matchAddress || !matchSnapshot?.host) throw new Error("match_host_unavailable");
+      if (!matchAddress || !matchSnapshot) throw new Error("match_state_unavailable");
       await skipEmptyRoundOnchain({
         baseRpcUrl: requireBaseSolanaRpc(),
-        teeRpcUrl: teeSolanaRpc,
         matchAddress,
-        round: matchSnapshot.currentRound,
-        authorityAddress: matchSnapshot.host,
         snapshot: matchSnapshot,
         programId,
       });
@@ -644,13 +683,10 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
     setResumingSkippedRound(true);
     setError("");
     try {
-      if (!matchAddress || !matchSnapshot?.host) throw new Error("match_host_unavailable");
+      if (!matchAddress || !matchSnapshot) throw new Error("match_state_unavailable");
       await resumeSkippedRoundOnchain({
         baseRpcUrl: requireBaseSolanaRpc(),
-        teeRpcUrl: teeSolanaRpc,
         matchAddress,
-        round: matchSnapshot.currentRound,
-        authorityAddress: matchSnapshot.host,
         snapshot: matchSnapshot,
         programId,
       });
@@ -696,10 +732,15 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
             </button>
             {activeMatchToRelease && (
               <>
-                <p>Host cleanup is required before this pit can create the next match. This abandons the old match and creates a fresh nonce.</p>
-                <button disabled={chainPhase === "joining" || releasingStaleMatch} onClick={() => void releaseStaleMatch()} type="button">
-                  {chainPhase === "joining" || releasingStaleMatch ? "Releasing active match…" : "Release stale match (host)"}
-                </button>
+                <p>Host cleanup is required before this pit can use a V2 match. Migrate a waiting V1 match to preserve its players, or release it to abandon the old state and create a fresh nonce.</p>
+            {legacyMatchToMigrate && (
+              <button disabled={chainPhase === "joining" || migratingLegacyMatch} onClick={() => void migrateLegacyMatch()} type="button">
+                {migratingLegacyMatch ? "Migrating legacy match…" : "Migrate waiting V1 match (host)"}
+              </button>
+            )}
+            <button disabled={chainPhase === "joining" || releasingStaleMatch} onClick={() => void releaseStaleMatch()} type="button">
+              {chainPhase === "joining" || releasingStaleMatch ? "Releasing active match…" : "Release stale match (host)"}
+            </button>
               </>
             )}
             <button className="pit-leave" onClick={onExit} type="button">Leave seat</button>
@@ -733,18 +774,6 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
               onReleaseStaleMatch={() => releaseStaleMatch(matchAddress)}
               releasingStaleMatch={releasingStaleMatch}
             />
-            {matchOwnership === "delegated" && (
-              <div className="match-bootstrap match-bootstrap-failed">
-                <p>This legacy match is delegated to the TEE. RFQs require the Match account on Base.</p>
-                {localIsHost ? (
-                  <button disabled={restoringMatch} onClick={() => void restoreMatchToBase()} type="button">
-                    {restoringMatch ? "Restoring match…" : "Restore match to Base (host)"}
-                  </button>
-                ) : (
-                  <p>Waiting for the host to restore the match.</p>
-                )}
-              </div>
-            )}
             {role === "PLAYER" && matchAddress && walletAddress && (
               <PrivateInventoryPanel
                 matchAddress={matchAddress}
@@ -753,34 +782,24 @@ export default function PitOverlay({ matchId, matchAddress, chainConfirmed, onCh
                 lastResolvedRound={matchSnapshot?.lastRoundResult?.round}
               />
             )}
-            {matchOwnership !== "delegated" && role === "PLAYER" && matchSnapshot?.status === "STARTED" && matchSnapshot.taker === walletAddress && !matchSnapshot.roundStatus && (
-              <div className="match-bootstrap">
-                <p>Prepare this round before collecting an intent. Dealers can set up private quote access before the 30-second RFQ window opens.</p>
-                <button disabled={preparingRound} onClick={() => void prepareRound()} type="button">
-                  {preparingRound ? "Preparing round…" : "Prepare next RFQ"}
-                </button>
-              </div>
-            )}
             <PrivateQuotePanel
-              active={matchOwnership !== "delegated" && role === "PLAYER" && (matchSnapshot?.roundStatus === "PREPARED" || matchSnapshot?.roundStatus === "OPEN") && Boolean(matchSnapshot.taker && matchSnapshot.taker !== walletAddress)}
+              active={matchOwnership !== "delegated" && role === "PLAYER" && matchSnapshot?.roundStatus === "OPEN" && Boolean(matchSnapshot.taker && matchSnapshot.taker !== walletAddress)}
               matchAddress={matchAddress}
               dealerAddress={walletAddress}
               round={matchSnapshot?.currentRound}
-              roundStatus={matchSnapshot?.roundStatus === "PREPARED" || matchSnapshot?.roundStatus === "OPEN" ? matchSnapshot.roundStatus : undefined}
+              roundStatus={matchSnapshot?.roundStatus === "OPEN" ? "OPEN" : undefined}
               oraclePriceE6={matchSnapshot?.oraclePriceE6}
               deadlineAt={matchSnapshot?.deadlineAt}
               programId={programId}
               onQuoteSealed={() => setMatchRevision((value) => value + 1)}
             />
-            {matchOwnership !== "delegated" && role === "PLAYER" && matchSnapshot?.roundStatus === "PREPARED" && matchSnapshot.taker === walletAddress && (
-              <p className="trade-intent-inactive">Dealers are preparing private quote access. Open the RFQ only after they confirm they are ready.</p>
-            )}
             <TradeIntentPanel
-              active={matchOwnership !== "delegated" && role === "PLAYER" && matchSnapshot?.roundStatus === "PREPARED" && matchSnapshot.taker === walletAddress}
+              active={matchOwnership !== "delegated" && role === "PLAYER" && matchSnapshot?.roundStatus === "PREPARED" && currentTaker === walletAddress}
               matchId={matchId}
               role={role}
               sessionId={sessionId}
               onSubmit={matchSnapshot && matchAddress ? submitIntent : undefined}
+              onRecoverSession={matchAddress && walletAddress ? renewSession : undefined}
               submissionStatus={rfqProgress}
             />
             <div className="pit-grid">

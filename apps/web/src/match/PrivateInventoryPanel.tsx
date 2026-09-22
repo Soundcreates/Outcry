@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { baseRpcConfigurationMessage, browserBaseRpc } from "../chain/baseRpc";
+import { sessionKeypairForMatch } from "../chain/matchActions";
 import { unlockPrivateInventory, type PrivateInventorySnapshot } from "../chain/privacy";
 
 type Props = {
@@ -11,7 +12,6 @@ type Props = {
 };
 
 const teeRpc = import.meta.env.VITE_MAGICBLOCK_TEE_RPC || import.meta.env.NEXT_PUBLIC_MAGICBLOCK_TEE_RPC || "";
-const teeValidator = import.meta.env.VITE_MAGICBLOCK_TEE_VALIDATOR || undefined;
 
 function formatUsdcE6(value: bigint) {
   const sign = value < 0n ? "-" : "";
@@ -27,10 +27,9 @@ export default function PrivateInventoryPanel({ matchAddress, playerAddress, pro
   const [error, setError] = useState("");
 
   const unlock = async () => {
-    const wallet = window.solana;
-    if (!matchAddress || !playerAddress || !wallet?.publicKey || !wallet.signMessage || !wallet.signTransaction) {
+    if (!matchAddress || !playerAddress) {
       setStatus("error");
-      setError(!wallet?.signMessage ? "wallet_message_signing_unavailable" : "wallet_transaction_signing_unavailable");
+      setError("private_inventory_unavailable");
       return;
     }
     if (!teeRpc) {
@@ -51,9 +50,8 @@ export default function PrivateInventoryPanel({ matchAddress, playerAddress, pro
         teeRpcUrl: teeRpc,
         matchAddress: new PublicKey(matchAddress),
         player: new PublicKey(playerAddress),
-        wallet,
+        sessionKeypair: sessionKeypairForMatch(matchAddress),
         programId: new PublicKey(programId),
-        teeValidator: teeValidator ? new PublicKey(teeValidator) : undefined,
       });
       setSnapshot(next);
       setStatus("ready");
@@ -67,7 +65,7 @@ export default function PrivateInventoryPanel({ matchAddress, playerAddress, pro
     <section className="private-inventory" aria-label="Private inventory">
       <div>
         <p className="eyebrow">PRIVATE INVENTORY</p>
-        <strong>Only your wallet can unlock this view.</strong>
+        <strong>Your authorized session can unlock this view.</strong>
       </div>
       {status === "locked" && <button onClick={() => void unlock()} type="button">Unlock private inventory</button>}
       {status === "loading" && <span role="status">Setting up private inventory…</span>}

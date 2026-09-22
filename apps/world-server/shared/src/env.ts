@@ -24,11 +24,15 @@ const serverEnvSchema = publicEnvSchema.extend({
   LIVEKIT_API_KEY: optionalString,
   LIVEKIT_API_SECRET: optionalString,
   GROQ_API_KEY: optionalString,
-  PYTH_HERMES_URL: optionalUrl,
-  PYTH_API_KEY: optionalString,
   ASSEMBLYAI_API_KEY: optionalString,
   OUTCRY_PROGRAM_ID: optionalString,
   OUTCRY_MATCH_ADDRESS: optionalString,
+  OUTCRY_REDIS_URL: optionalUrl,
+  OUTCRY_RELAYER_KEYPAIR_PATH: optionalString,
+  OUTCRY_TEE_RELAYER_KEYPAIR_PATH: optionalString,
+  OUTCRY_RELAYER_RPC_URL: optionalUrl,
+  OUTCRY_MAGICBLOCK_ROUTER_RPC: optionalUrl,
+  OUTCRY_TEE_VALIDATOR: optionalString,
 });
 
 export function readPublicEnv(input: Record<string, unknown> = process.env) {
